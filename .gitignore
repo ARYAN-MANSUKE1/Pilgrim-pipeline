@@ -1,3 +1,18 @@
 .env
 __pycache__/
 *.pyc
+
+# Runtime state
+dashboard/jobs_state.json
+
+# Local tooling / agent config
+.claude/
+.clinerules/
+
+# Deliverables & heavy artifacts (shared out-of-band, not in the repo)
+experiments/
+sample_output/
+*.pdf
+*.zip
+*.wav
+*.mp3

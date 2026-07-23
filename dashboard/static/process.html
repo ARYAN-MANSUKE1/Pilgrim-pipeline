@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Process Temples · Pilgrim Pipeline</title>
+<link rel="stylesheet" href="/static/style.css">
+<style> .wrap { padding-bottom:120px; } </style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🛕 Pilgrim Pipeline</span>
+    <a href="/">Home</a>
+    <a href="/process" class="active">Process Temples</a>
+    <a href="/add">Add Temple</a>
+    <span class="spacer"></span>
+    <span class="pill" id="count2">…</span>
+  </nav>
+
+  <div class="wrap">
+    <div class="toolbar">
+      <input id="search" type="search" placeholder="Search temple by name…" style="min-width:320px" onkeydown="if(event.key==='Enter')load(1)">
+      <button class="btn" onclick="load(1)">Search Temple</button>
+      <button class="btn ghost" onclick="document.getElementById('search').value='';load(1)">Clear</button>
+      <span class="count" id="count"></span>
+    </div>
+    <div id="tablebox"><div class="loading">Loading temples from WordPress…</div></div>
+    <div class="pager">
+      <button id="prev" onclick="load(state.page-1)">← Prev</button>
+      <span id="pageinfo" class="muted"></span>
+      <button id="next" onclick="load(state.page+1)">Next →</button>
+      <span style="margin-left:18px; display:flex; align-items:center; gap:6px;">
+        Jump to page
+        <input id="jump" type="number" min="1" style="width:80px; padding:6px 8px; border:1px solid var(--line); border-radius:8px" onkeydown="if(event.key==='Enter')jumpTo()">
+        <button class="btn" style="padding:6px 12px" onclick="jumpTo()">Go</button>
+      </span>
+    </div>
+
+    <h1 class="page" style="margin-top:26px">Jobs <span class="muted" id="qdepth"></span>
+      <button class="btn ghost" style="float:right;padding:6px 12px" onclick="clearJobs()">Clear finished</button></h1>
+    <div id="jobsbox"><div class="muted">No jobs yet — select temples below and run.</div></div>
+    <div id="logview"></div>
+  </div>
+
+  <div id="actionbar">
+    <span class="sel"><span id="selcount">0</span> selected</span>
+    <label>Operation
+      <select id="op">
+        <option value="full">Translate + Audio</option>
+        <option value="translate">Translate only</option>
+        <option value="audio">Audio only</option>
+      </select>
+    </label>
+    <label>Source
+      <select id="src"><option value="">Auto-detect</option><option value="mr">Marathi</option><option value="en">English</option><option value="hi">Hindi</option></select>
+    </label>
+    <span class="langpick" id="langpick"></span>
+    <button class="btn" onclick="runSelected()">▶ Run</button>
+    <button class="btn ghost" onclick="clearSel()">Clear</button>
+  </div>
+
+<script>
+const LANGS = ["mr","en","hi","gj","ta","te","ml","kn"];
+const state = { page:1, pages:1, rows:[], selected:new Set() };
+document.getElementById('langpick').innerHTML = 'Languages ' + LANGS.map(l =>
+  `<label><input type="checkbox" class="lang" value="${l}" checked>${l}</label>`).join('');
+
+async function load(page) {
+  if (page < 1) return;
+  state.page = page;
+  document.getElementById('tablebox').innerHTML = '<div class="loading">Loading…</div>';
+  const q = encodeURIComponent(document.getElementById('search').value || '');
+  const data = await (await fetch(`/api/temples?page=${page}&per_page=20&search=${q}`)).json();
+  state.rows = data.temples; state.pages = data.pages;
+  document.getElementById('count').textContent = `${data.total} temples`;
+  document.getElementById('count2').textContent = `${data.total} temples`;
+  document.getElementById('pageinfo').textContent = `Page ${data.page} of ${data.pages}`;
+  document.getElementById('prev').disabled = data.page<=1;
+  document.getElementById('next').disabled = data.page>=data.pages;
+  renderTable(data);
+}
+function chip(code, chars, min, audioOn, isSrc) {
+  const filled = chars >= min;
+  return `<div class="chip ${filled?'filled':''} ${isSrc?'src':''}" title="${code}: ${chars} chars"><span class="code">${code}</span><span>${filled?'✓':'–'}</span><span class="a ${audioOn?'on':''}">${audioOn?'♪':'·'}</span></div>`;
+}
+function renderTable(data) {
+  if (!data.temples.length) { document.getElementById('tablebox').innerHTML='<div class="loading">No temples found.</div>'; return; }
+  const rows = data.temples.map(t => {
+    const langs = LANGS.map(l => chip(l, t.content[l]??0, data.min_chars, !!t.audio[l], t.source===l)).join('');
+    const checked = state.selected.has(t.id) ? 'checked' : '';
+    return `<tr><td><input type="checkbox" class="rowchk" data-id="${t.id}" ${checked} onchange="toggleRow(${t.id}, this.checked)"></td><td>${t.id}</td><td class="temple"><a href="${t.link}" target="_blank">${t.title}</a><div class="muted">source: <b>${t.source??'—'}</b></div></td><td><div class="langs">${langs}</div></td></tr>`;
+  }).join('');
+  document.getElementById('tablebox').innerHTML = `<table><thead><tr><th style="width:34px"><input type="checkbox" onchange="toggleAll(this.checked)"></th><th style="width:64px">ID</th><th>Temple</th><th>Languages (✓ text · ♪ audio)</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function toggleRow(id,on){ on?state.selected.add(id):state.selected.delete(id); refreshSel(); }
+function toggleAll(on){ state.rows.forEach(t=>on?state.selected.add(t.id):state.selected.delete(t.id)); document.querySelectorAll('.rowchk').forEach(c=>c.checked=on); refreshSel(); }
+function clearSel(){ state.selected.clear(); document.querySelectorAll('.rowchk').forEach(c=>c.checked=false); refreshSel(); }
+function refreshSel(){ document.getElementById('selcount').textContent=state.selected.size; document.getElementById('actionbar').classList.toggle('show', state.selected.size>0); }
+async function runSelected() {
+  const langs=[...document.querySelectorAll('.lang:checked')].map(c=>c.value);
+  const body={ temples: state.rows.filter(t=>state.selected.has(t.id)).map(t=>({id:t.id,title:t.title})), operation:document.getElementById('op').value, languages: langs.length===LANGS.length?null:langs, source:document.getElementById('src').value||null };
+  state.selected.forEach(id=>{ if(!body.temples.find(x=>x.id===id)) body.temples.push({id,title:'Temple '+id}); });
+  const res=await (await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  clearSel(); pollJobs(); alert(`Queued ${res.queued} temple(s).`);
+}
+async function pollJobs() {
+  const data=await (await fetch('/api/jobs')).json();
+  document.getElementById('qdepth').textContent = data.queue_depth ? `(${data.queue_depth} in queue)`:'';
+  if(!data.jobs.length){ document.getElementById('jobsbox').innerHTML='<div class="muted">No jobs yet.</div>'; return; }
+  document.getElementById('jobsbox').innerHTML='<table><thead><tr><th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th></tr></thead><tbody>'
+    + data.jobs.map(j=>`<tr onclick="viewLog(${j.id})" style="cursor:pointer"><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td></tr>`).join('')
+    + '</tbody></table>';
+}
+async function viewLog(id){ const j=await (await fetch('/api/jobs/'+id)).json(); document.getElementById('logview').innerHTML=`<div class="logbox">#${id} ${j.temple_title}\n${(j.logs||[]).join('\n')}${j.error?('\nERROR: '+j.error):''}</div>`; }
+async function clearJobs(){ await fetch('/api/jobs/clear',{method:'POST'}); pollJobs(); document.getElementById('logview').innerHTML=''; }
+function jumpTo(){ const p=parseInt(document.getElementById('jump').value,10); const max=state.pages||1;
+  if(p>=1 && p<=max) load(p); else alert('Enter a page between 1 and '+max); }
+load(1); setInterval(pollJobs,2000); pollJobs();
+</script>
+</body>
+</html>

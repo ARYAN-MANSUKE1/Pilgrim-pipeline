@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add Temple · Pilgrim Pipeline</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🛕 Pilgrim Pipeline</span>
+    <a href="/">Home</a>
+    <a href="/process">Process Temples</a>
+    <a href="/add" class="active">Add Temple</a>
+  </nav>
+
+  <div class="wrap" style="max-width:820px">
+    <h1 class="page">Add a new temple</h1>
+    <p class="muted" style="margin-top:-10px">Enter the temple in its source language. The pipeline translates it into the other languages, generates audio, and writes it into WordPress.</p>
+
+    <div class="card" style="margin-top:16px">
+      <label class="field"><span>Source language</span>
+        <select id="src">
+          <option value="mr" selected>Marathi</option>
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="other">Other — auto-detect</option>
+        </select>
+        <div class="hint">The language your content is in. Pick <b>Other</b> only if it's something unusual (e.g. Tamil) — the agent will detect it. For Marathi/English/Hindi, choosing directly saves a step.</div>
+      </label>
+
+      <div class="hint" style="background:#fff6ec; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:16px;">
+        ℹ️ Temples are created as <b>Draft</b> in WordPress. Review it there, and <b>publish it yourself in WordPress</b> when it's ready to go live.
+      </div>
+
+      <label class="field"><span>Title</span>
+        <input type="text" id="title" placeholder="e.g. Ambabai Temple, Jat, Dist. Sangli">
+      </label>
+
+      <label class="field"><span>Content (HTML from the WordPress editor, or plain text)</span>
+        <textarea id="content" placeholder="Paste the temple description here. Headings, paragraphs, and &lt;img&gt; tags are all preserved."></textarea>
+        <div class="hint">Per-word &lt;span&gt; wrappers get cleaned automatically; images & paragraph structure are kept.</div>
+      </label>
+
+      <label class="field"><span>Languages — choose Translate and/or Audio for each</span>
+        <table style="max-width:460px">
+          <thead><tr><th>Language</th><th style="text-align:center;width:90px">Translate</th><th style="text-align:center;width:70px">Audio</th></tr></thead>
+          <tbody id="matrixbody"></tbody>
+        </table>
+        <div class="hint">The source language isn't translated (it's your content) — tick <b>Audio</b> to voice it.
+          Audio costs more, so it's <b>off by default</b>. Use the toggles below to set a column at once.</div>
+        <div style="margin-top:8px; display:flex; gap:10px; flex-wrap:wrap">
+          <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('tr',true)">Translate all</button>
+          <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('tr',false)">Translate none</button>
+          <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('au',true)">Audio all</button>
+          <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('au',false)">Audio none</button>
+        </div>
+      </label>
+
+      <div style="display:flex; gap:12px; align-items:center; margin-top:6px">
+        <button class="btn big" id="submit" onclick="create()">Create temple &amp; run →</button>
+        <span id="msg" class="muted"></span>
+      </div>
+    </div>
+
+    <div id="result" style="margin-top:18px"></div>
+
+    <p class="hint" style="margin-top:20px">Coming next: photo/gallery upload and State / City / Category selection. For now, add those in WordPress after the temple is created.</p>
+  </div>
+
+<script>
+const LANGS = ["mr","en","hi","gj","ta","te","ml","kn"];
+const NAMES = {mr:"Marathi",en:"English",hi:"Hindi",gj:"Gujarati",ta:"Tamil",te:"Telugu",ml:"Malayalam",kn:"Kannada"};
+function buildMatrix() {
+  const src = document.getElementById('src').value;
+  document.getElementById('matrixbody').innerHTML = LANGS.map(l => {
+    const isSrc = (l === src);  // source is never translated
+    const trCell = isSrc ? '<span class="muted">source</span>'
+                         : `<input type="checkbox" class="tr" data-l="${l}" checked>`;
+    return `<tr><td>${NAMES[l]}</td>
+      <td style="text-align:center">${trCell}</td>
+      <td style="text-align:center"><input type="checkbox" class="au" data-l="${l}"></td></tr>`;
+  }).join('');
+}
+function setCol(cls, on){ document.querySelectorAll('.'+cls).forEach(c=>c.checked=on); }
+document.getElementById('src').addEventListener('change', buildMatrix);
+buildMatrix();
+
+async function create() {
+  const title = document.getElementById('title').value.trim();
+  const content = document.getElementById('content').value.trim();
+  const src = document.getElementById('src').value;
+  if (!title || !content) { msg('Please fill in a title and content.', true); return; }
+  const translate_langs = [...document.querySelectorAll('.tr:checked')].map(c=>c.dataset.l);
+  const audio_langs = [...document.querySelectorAll('.au:checked')].map(c=>c.dataset.l);
+  if (!translate_langs.length && !audio_langs.length) { msg('Pick at least one Translate or Audio option.', true); return; }
+  const btn = document.getElementById('submit'); btn.disabled = true;
+  msg('Creating temple in WordPress…');
+  try {
+    const res = await (await fetch('/api/create_temple', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ title, content, source_lang: src, translate_langs, audio_langs })
+    })).json();
+    if (res.error) { msg('Error: '+res.error, true); btn.disabled=false; return; }
+    msg('');
+    const det = res.detected ? `<p>🔎 Auto-detected source language: <b>${NAMES[res.detected]||res.detected}</b></p>` : '';
+    document.getElementById('result').innerHTML =
+      `<div class="card"><h3>✓ Temple created (ID ${res.temple_id})</h3>
+       ${det}
+       <p>Queued as job #${res.job_id}. Watch it on the <a href="/process">Process Temples</a> page (Jobs section).</p>
+       <a href="${res.link}" target="_blank"><button class="btn ghost">Open temple in WordPress</button></a></div>`;
+    document.getElementById('title').value=''; document.getElementById('content').value='';
+    btn.disabled = false;
+  } catch(e) { msg('Failed: '+e, true); btn.disabled=false; }
+}
+function msg(t, err){ const m=document.getElementById('msg'); m.textContent=t; m.style.color = err ? '#c0392b' : ''; }
+</script>
+</body>
+</html>

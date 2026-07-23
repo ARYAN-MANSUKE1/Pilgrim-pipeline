@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pilgrim Pipeline</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🛕 Pilgrim Pipeline</span>
+    <a href="/" class="active">Home</a>
+    <a href="/process">Process Temples</a>
+    <a href="/add">Add Temple</a>
+    <span class="spacer"></span>
+    <span class="pill" id="total">…</span>
+  </nav>
+
+  <div class="wrap">
+    <h1 class="page">Overview</h1>
+
+    <div class="cards" style="margin-bottom:22px">
+      <div class="card"><p>Temples in WordPress</p><div class="stat" id="s-total">…</div></div>
+      <div class="card"><p>Jobs completed (this session)</p><div class="stat" id="s-done">…</div></div>
+      <div class="card"><p>In queue right now</p><div class="stat" id="s-queue">…</div></div>
+    </div>
+
+    <div class="cards" style="margin-bottom:26px">
+      <div class="card">
+        <h3>Process existing temples</h3>
+        <p>Browse all temples, see what's translated & voiced, and run translation / audio in batches.</p>
+        <a href="/process"><button class="btn big">Open Process Temples →</button></a>
+      </div>
+      <div class="card">
+        <h3>Add a new temple</h3>
+        <p>Enter a new temple's content, choose languages, and let the pipeline translate, voice and publish it.</p>
+        <a href="/add"><button class="btn big">Add New Temple →</button></a>
+      </div>
+    </div>
+
+    <h1 class="page">Recent jobs</h1>
+    <div id="jobsbox"><div class="muted">No jobs yet.</div></div>
+  </div>
+
+<script>
+async function load() {
+  try {
+    const s = await (await fetch('/api/stats')).json();
+    document.getElementById('total').textContent = s.total_temples.toLocaleString() + ' temples';
+    document.getElementById('s-total').innerHTML = s.total_temples.toLocaleString();
+    document.getElementById('s-done').innerHTML = s.jobs_done + '<span class="u">done</span>';
+    document.getElementById('s-queue').innerHTML = s.queue_depth + '<span class="u">queued</span>';
+  } catch(e){}
+  const data = await (await fetch('/api/jobs')).json();
+  const jobs = data.jobs.slice(0, 12);
+  if (!jobs.length) { document.getElementById('jobsbox').innerHTML = '<div class="muted">No jobs yet — run something from Process or Add.</div>'; return; }
+  document.getElementById('jobsbox').innerHTML = '<table><thead><tr><th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th></tr></thead><tbody>'
+    + jobs.map(j => `<tr><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td></tr>`).join('')
+    + '</tbody></table>';
+}
+load(); setInterval(load, 3000);
+</script>
+</body>
+</html>
