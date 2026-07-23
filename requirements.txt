@@ -4,12 +4,18 @@
 pydantic-settings
 python-dotenv
 
-# --- audio task (Sarvam Bulbul v2 TTS → stitch → Cloudflare R2) ---
+# --- translation (Gemini via Vertex AI ADC or API key) ---
+google-auth        # only needed when GEMINI_USE_ADC=1 (Application Default Credentials)
+
+# --- audio task (Sarvam Bulbul v2/v3 TTS -> stitch -> Cloudflare R2) ---
 httpx
 tenacity
-boto3
+boto3               # only needed for R2 upload (lazy import)
+
+# --- admin dashboard (FastAPI) ---
+fastapi
+uvicorn
 
 # Audio stitching uses Python's stdlib `wave` (no pydub/audioop — works on Python 3.13+).
 # MP3 compression is optional and uses ffmpeg if present (Docker: apt-get install -y ffmpeg);
-# without ffmpeg the task outputs WAV. Framework deps (fastapi, uvicorn, redis, celery,
-# sqlalchemy, psycopg2) will be added when main.py / orchestrator / models are built.
+# without ffmpeg the task outputs WAV.
