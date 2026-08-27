@@ -24,6 +24,7 @@ from tenacity import (
 )
 
 from app.config import LANGUAGE_NAMES, settings
+from app.tasks import costs
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,13 @@ _SYSTEM = (
     "Translate the user's text into {target} using natural, fluent, respectful "
     "devotional language. Keep deity names, saints' names, Sanskrit and religious "
     "terms, temple and place names, dates and numbers accurate and recognisable. "
+    # Digits: Gemini localised them for Gujarati/Marathi but left ASCII for
+    # Telugu, Malayalam, Tamil and Punjabi -- inconsistent across the site. Native
+    # numerals are also SAFER for the audio: the number-to-words step converts a
+    # language's own digits correctly, but mis-reads digits from another script
+    # (Devanagari 130 fed to Kannada came back as "one three zero").
+    "Write all digits in {target}'s own numeral script, never Western/ASCII "
+    "digits, and never in another language's numerals. Phone numbers included. "
     "Preserve any placeholder tokens (for example zZqSEGqZz) and symbols exactly "
     "as given, in the same positions. Return ONLY the translation — no quotes, "
     "notes, or explanations."
@@ -109,13 +117,21 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     payload = {
         "systemInstruction": {"parts": [{"text": _SYSTEM.format(target=target)}]},
         "contents": [{"role": "user", "parts": [{"text": f"Translate this from {source} to {target}:\n\n{text}"}]}],
-        "generationConfig": {"temperature": 0.3, "topP": 0.95, "maxOutputTokens": 16384},
+        # thinkingBudget 0: gemini-2.5-flash reasons before answering by default,
+        # which cost ~1000 thought tokens and 2.6x the latency per call (measured
+        # 8.9s -> 3.4s) for no gain on a translation -- it only added embellishment
+        # ("the revered temple, showcasing...") over the literal source. Thought
+        # tokens bill as output at the output rate, so this is cheaper too.
+        "generationConfig": {"temperature": 0.3, "topP": 0.95, "maxOutputTokens": 16384,
+                             "thinkingConfig": {"thinkingBudget": 0}},
         "safetySettings": _SAFETY,
     }
 
     resp = httpx.post(url, json=payload, headers=_auth_headers(), timeout=120)
     resp.raise_for_status()
     data = resp.json()
+
+    costs.record_translation(data.get("usageMetadata"), target_lang)
 
     candidates = data.get("candidates") or []
     if not candidates:
