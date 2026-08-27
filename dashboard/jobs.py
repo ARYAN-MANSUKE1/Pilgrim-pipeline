@@ -1,8 +1,9 @@
 """
 Background job registry + worker for the dashboard.
 
-A single worker thread processes jobs FIFO (sequential = naturally paces API
-rate limits and the WP server). State is persisted to a JSON file, so a server
+settings.job_workers threads process jobs FIFO. Costs stay attributed to the
+right temple because the in-flight temple id is a ContextVar, not a global
+(app/tasks/costs.py). State is persisted to a JSON file, so a server
 restart or crash doesn't lose the queue: on startup, any jobs that were queued
 or interrupted mid-run are re-queued and resume automatically. Re-running a
 temple is safe (translation/audio just overwrite).
@@ -12,11 +13,13 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import queue
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.config import settings
 from dashboard.pipeline import process_temple
 
 _STATE = Path(__file__).parent / "jobs_state.json"
@@ -34,9 +37,10 @@ def _now() -> str:
 def _save() -> None:
     """Best-effort persistence — never let a save error affect a job."""
     try:
+        # The file write is inside the lock too: with several workers, two
+        # concurrent saves could otherwise interleave and truncate the state.
         with _lock:
-            data = json.dumps(_jobs)
-        _STATE.write_text(data, encoding="utf-8")
+            _STATE.write_text(json.dumps(_jobs), encoding="utf-8")
     except Exception:
         pass
 
@@ -57,13 +61,13 @@ def _load() -> None:
 
 
 def enqueue(temple_id, temple_title, operation, languages, source,
-            translate_langs=None, audio_langs=None) -> int:
+            translate_langs=None, audio_langs=None, force=False) -> int:
     jid = next(_counter)
     with _lock:
         _jobs[jid] = {
             "id": jid, "temple_id": temple_id, "temple_title": temple_title,
             "operation": operation, "languages": languages, "source": source,
-            "translate_langs": translate_langs, "audio_langs": audio_langs,
+            "translate_langs": translate_langs, "audio_langs": audio_langs, "force": force,
             "status": "queued", "logs": [], "error": None,
             "queued_at": _now(), "started_at": None, "finished_at": None,
         }
@@ -74,6 +78,19 @@ def enqueue(temple_id, temple_title, operation, languages, source,
 
 def _log(job: dict, msg: str) -> None:
     job["logs"].append(f"{datetime.now().strftime('%H:%M:%S')} {msg}")
+
+
+def _sync_sheet(job: dict) -> None:
+    """Refresh THIS temple's row in the shared tracking sheet -- one WP request,
+    not a full-site re-read. Best-effort: the sheet is a report, so neither a
+    Google outage nor a WordPress blip may fail or stall a pipeline job."""
+    try:
+        from dashboard import main, sheet_sync
+        if not (settings.google_sa_json and settings.sheet_id):
+            return
+        sheet_sync.sync(main.sheet_desired_one(job["temple_id"]))
+    except Exception as e:  # noqa: BLE001
+        _log(job, f"sheet sync skipped: {e}")
 
 
 def _worker() -> None:
@@ -94,6 +111,7 @@ def _worker() -> None:
                         job.get("source"), log=lambda m, j=job: _log(j, m),
                         translate_langs=job.get("translate_langs"),
                         audio_langs=job.get("audio_langs"),
+                        force=job.get("force", False),
                     )
                     job["status"] = "done"
                 except Exception as e:  # noqa: BLE001 — surface any failure to the UI
@@ -103,6 +121,7 @@ def _worker() -> None:
                 finally:
                     job["finished_at"] = _now()
                     _save()
+                    _sync_sheet(job)
         except Exception:
             pass  # a single bad job must never kill the worker thread
         finally:
@@ -113,7 +132,13 @@ def _worker() -> None:
 
 
 def start_worker() -> None:
+    """Start the background worker. Importing dashboard.main triggers this, so a
+    one-off script that imports it for a helper function would otherwise start a
+    SECOND worker against the same persisted queue and race the running server.
+    Set PILGRIM_NO_WORKER=1 in anything that is not the server."""
     global _started
+    if os.environ.get("PILGRIM_NO_WORKER"):
+        return
     if _started:
         return
     _started = True
@@ -126,7 +151,8 @@ def start_worker() -> None:
         _q.put(jid)
     if pending:
         _save()
-    threading.Thread(target=_worker, daemon=True, name="pilgrim-worker").start()
+    for n in range(1, max(1, settings.job_workers) + 1):
+        threading.Thread(target=_worker, daemon=True, name=f"pilgrim-worker-{n}").start()
 
 
 def all_jobs() -> list[dict]:

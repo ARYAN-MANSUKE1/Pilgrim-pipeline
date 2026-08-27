@@ -14,6 +14,8 @@ import re
 import time
 from typing import Optional
 
+import threading
+
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
@@ -29,6 +31,8 @@ _wp_retry = retry(
     retry=retry_if_exception_type(httpx.TransportError),
     reraise=True,
 )
+
+_acf_write_lock = threading.Lock()
 
 SARVAM_TRANSLATE_URL = "https://api.sarvam.ai/translate"
 _TRANSLATE_MAX_CHARS = 1800
@@ -61,6 +65,8 @@ TITLE_FIELD_KEYS = {
     "te": "telugu_title",
     "ml": "malayalam_title",
     "kn": "kannada_title",
+    "bn": "bengali_title",
+    "pa": "punjabi_title",
 }
 
 LANG_NAMES = {
@@ -87,10 +93,12 @@ AUDIO_FIELD_KEYS = {
     "en": "english_audio",
     "hi": "hindi_audio",
     "gj": "gujarati_audio",  # site uses 'gj' switcher code, field key is gujarati_audio
-    "ta": "tamil_audio",     # field not yet created — Engineer 1 will add
-    "te": "telugu_audio",    # field not yet created — Engineer 1 will add
-    "ml": "malayalam_audio", # new — ACF field must be created in WP
-    "kn": "kannada_audio",   # new — ACF field must be created in WP
+    "ta": "tamil_audio",
+    "te": "telugu_audio",
+    "ml": "malayalam_audio",
+    "kn": "kannada_audio",
+    "bn": "bengali_audio",
+    "pa": "punjabi_audio",
 }
 
 
@@ -99,11 +107,55 @@ CONTENT_FIELD_KEYS = {
     "en": "en_translation",
     "hi": "hi_translation",
     "gj": "gujarati_content",   # site uses 'gj' code; ACF field is gujarati_content
-    "ta": "tamil_content",      # confirmed from Engineer 1's agent.py
-    "te": "telugu_content",     # confirmed from Engineer 1's agent.py
-    "ml": "malayalam_content",  # new — ACF field must be created in WP
-    "kn": "kannada_content",    # new — ACF field must be created in WP
+    "ta": "tamil_content",
+    "te": "telugu_content",
+    "ml": "malayalam_content",
+    "kn": "kannada_content",
+    "bn": "bengali_content",
+    "pa": "punjabi_content",
 }
+
+
+def _slugify(name: str) -> str:
+    """Match PHP's sanitize_title($name) + str_replace('-','_') from
+    functions.php's ACF field registration, so a Python-computed field name
+    always matches the field WordPress actually created for a language."""
+    slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower())
+    return slug.strip("_")
+
+
+def refresh_language_fields() -> None:
+    """
+    Pull the language registry (pilgrim/v1/languages) and add field-key
+    entries for any language with fields=true that isn't already in
+    TITLE_FIELD_KEYS / AUDIO_FIELD_KEYS / CONTENT_FIELD_KEYS -- so a language
+    added via the dashboard becomes usable by the pipeline immediately, with
+    no code change. Mutates the module-level dicts in place.
+
+    Safe to call repeatedly (idempotent) and safe if WordPress/the registry
+    endpoint is unreachable -- falls back to whatever field keys are already
+    known rather than raising, since a transient network issue here should
+    never block temple processing for the languages that already work.
+    """
+    try:
+        url = settings.wp_url.rstrip("/") + "/wp-json/pilgrim/v1/languages"
+        r = httpx.get(url, auth=_auth(), timeout=15)
+        r.raise_for_status()
+        langs = r.json()
+    except Exception as e:
+        logger.warning("Could not refresh language registry (%s) — using existing field keys.", e)
+        return
+
+    for code, lang in langs.items():
+        if not lang.get("fields") or code in CONTENT_FIELD_KEYS:
+            continue
+        slug = _slugify(lang.get("name", code))
+        if not slug:
+            continue
+        CONTENT_FIELD_KEYS[code] = f"{slug}_content"
+        AUDIO_FIELD_KEYS[code] = f"{slug}_audio"
+        TITLE_FIELD_KEYS[code] = f"{slug}_title"
+        logger.info("Registered new language '%s' (%s) from the language registry.", code, lang.get("name"))
 
 
 def _auth() -> tuple[str, str]:
@@ -284,7 +336,7 @@ def write_title_and_content(post_id: int, lang: str, title: str, content: str) -
     if content:
         updates[CONTENT_FIELD_KEYS[lang]] = content
     url = f"{_base()}/temple/{post_id}"
-    resp = httpx.post(url, json={"acf": updates}, auth=_auth(), timeout=30)
+    resp = httpx.post(url, json={"acf": updates}, auth=_auth(), timeout=120)
     resp.raise_for_status()
     logger.info("Wrote %s title+content → post %d", lang, post_id)
 
@@ -344,8 +396,13 @@ def set_audio_field(post_id: int, lang: str, attachment_id: int) -> None:
 
     url = f"{_base()}/temple/{post_id}"
     payload = {"acf": {field_key: attachment_id}}
-    resp = httpx.post(url, json=payload, auth=_auth(), timeout=30)
-    resp.raise_for_status()
+    # Serialised: languages are now voiced concurrently, so several threads reach
+    # here for the SAME post. WP read-modify-writes the acf group, and concurrent
+    # updates silently drop one another's field. The call is ~1s, so a single
+    # global lock costs nothing next to the synthesis it follows.
+    with _acf_write_lock:
+        resp = httpx.post(url, json=payload, auth=_auth(), timeout=120)
+        resp.raise_for_status()
     logger.info("Set %s = %d on post %d", field_key, attachment_id, post_id)
 
 

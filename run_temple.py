@@ -27,6 +27,7 @@ from app.config import settings
 from app.tasks import wp_client as wp
 from app.tasks.gemini_translate import translate as gtranslate
 from app.tasks.source_detect import detect_source_language
+from app.tasks import costs
 from app.tasks.structured_translate import strip_cosmetic_spans, strip_tags, translate_html
 
 # Gemini's request cap is far above Sarvam's; send the whole body in 1-2 calls.
@@ -35,7 +36,6 @@ _GEMINI_MAX_CHARS = 6000
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("run_temple")
 
-ALL_LANGS = ("mr", "en", "hi", "gj", "ta", "te", "ml", "kn")
 
 
 def _fetch_post(post_id: int) -> dict:
@@ -50,6 +50,12 @@ def run(post_id: int, forced_source: str | None = None, targets: list[str] | Non
     if not (settings.wp_url and settings.wp_user and settings.wp_app_password):
         log.error("WP creds missing — set WP_URL, WP_USER, WP_APP_PASSWORD in .env.")
         return
+
+    costs.set_temple(post_id)  # log this run's Gemini/Sarvam spend against the temple
+
+    # Pick up any language added via the dashboard's /languages registry since
+    # the last refresh, so its ACF field keys are known before we need them.
+    wp.refresh_language_fields()
 
     post = _fetch_post(post_id)
     acf = post.get("acf", {}) or {}
@@ -70,7 +76,7 @@ def run(post_id: int, forced_source: str | None = None, targets: list[str] | Non
         return
 
     src_title = strip_tags(titles.get(source) or post.get("title", {}).get("rendered", ""))
-    tgts = targets or [l for l in ALL_LANGS if l != source]
+    tgts = targets or [l for l in wp.CONTENT_FIELD_KEYS if l != source]
     log.info("Temple %s (slug=%s): source=%s (%d chars) -> targets=%s",
              post_id, slug, source, len(content[source]), ",".join(tgts))
 
