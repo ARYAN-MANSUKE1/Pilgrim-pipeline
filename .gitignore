@@ -16,3 +16,17 @@ sample_output/
 *.zip
 *.wav
 *.mp3
+
+# per-temple cost ledger (local data, appended by app/tasks/costs.py)
+cost_ledger.jsonl
+
+# Google service-account key for the tracking sheet -- never commit
+sheet-key.json
+*-service-account*.json
+
+# scratch files from the staging->live migration session
+_block_h*.txt
+_slider_*.txt
+_push_rows.json
+migrate_run.log
+*.mp3
