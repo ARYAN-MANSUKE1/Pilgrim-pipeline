@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Languages · Pilgrim Pipeline</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🛕 Pilgrim Pipeline</span>
+    <a href="/">Home</a>
+    <a href="/process">Process Temples</a>
+    <a href="/add">Add Temple</a>
+    <a href="/languages" class="active">Languages</a>
+  </nav>
+
+  <div class="wrap">
+    <h1 class="page">Languages</h1>
+    <p class="muted" style="margin-top:-10px">
+      One place for the whole site's language setup. Add a language here — its ACF content/audio/title
+      fields, the nav menu, and the footer/header text all follow from this, no Elementor or menu editing.
+    </p>
+
+    <div class="card" style="margin-top:18px; margin-bottom:26px">
+      <h3>Add a language</h3>
+      <p>Pick from the languages Sarvam can actually generate audio for — this guarantees translation
+        <b>and</b> audio both work, with no chance of a typo'd code. (Full list, verified against Sarvam's
+        own API docs: Hindi, Bengali, English, Gujarati, Kannada, Malayalam, Marathi, Odia, Punjabi, Tamil, Telugu.)</p>
+      <div class="row">
+        <label class="field"><span>Language</span>
+          <select id="new-select"><option value="">Loading…</option></select>
+          <div class="hint">Code and native-script name are filled in automatically once you pick one.</div>
+        </label>
+      </div>
+      <p class="muted" style="font-size:13px">
+        Need a language not on this list? <a href="#" id="show-other" onclick="toggleOther(event)">Add it manually</a> —
+        translation will still work, but <b>Sarvam cannot generate audio for it</b>; leave Audio off when processing temples in it.
+      </p>
+      <div id="other-fields" class="row" style="display:none">
+        <label class="field"><span>Language code</span>
+          <input type="text" id="new-code" placeholder="e.g. ur" maxlength="5">
+        </label>
+        <label class="field"><span>English name</span>
+          <input type="text" id="new-name" placeholder="e.g. Urdu">
+        </label>
+      </div>
+      <div class="langpick" style="margin:14px 0">
+        <label><input type="checkbox" id="opt-fields" checked> Create ACF fields (Content / Audio / Title) for this language</label>
+        <label><input type="checkbox" id="opt-chrome" checked> Add nav menu + footer/header translations</label>
+        <label><input type="checkbox" id="opt-visible" checked> Show in the language dropdown on the site</label>
+      </div>
+      <button class="btn big" id="add-btn" onclick="addLanguage()">Add Language</button>
+      <span id="add-status" class="muted" style="margin-left:10px"></span>
+    </div>
+
+    <div class="card" style="margin-bottom:26px">
+      <h3>Current languages</h3>
+      <p>Toggle any box and hit Save on that row to change it — turning off <b>ACF fields</b> hides that
+        language's Content/Audio/Title fields from the temple editor (its saved data is untouched and comes
+        back the moment you turn it back on). Turning off <b>Nav/chrome</b> drops it from the nav menu and
+        footer/header text. Turning off <b>Visible</b> just hides it from the site's language dropdown. To
+        fully retire a language, turn all three off.</p>
+      <div id="langtable"><div class="muted">Loading…</div></div>
+      <button class="btn ghost" id="sync-btn" onclick="syncAll()" style="margin-top:14px">Re-sync nav &amp; chrome now</button>
+      <span id="sync-status" class="muted" style="margin-left:10px"></span>
+    </div>
+
+    <pre id="log" style="display:none; max-height:320px; overflow:auto; background:#0002; padding:10px; border-radius:8px; font-size:13px; white-space:pre-wrap"></pre>
+  </div>
+
+<script>
+let LANGS_CACHE = {};
+
+async function loadLanguages() {
+  const box = document.getElementById('langtable');
+  try {
+    LANGS_CACHE = await (await fetch('/api/languages')).json();
+    const codes = Object.keys(LANGS_CACHE);
+    if (!codes.length) { box.innerHTML = '<div class="muted">No languages yet.</div>'; return; }
+    box.innerHTML = '<table><thead><tr><th>Code</th><th>Name</th><th>Native</th>'
+      + '<th style="text-align:center">ACF fields</th><th style="text-align:center">Nav/chrome</th>'
+      + '<th style="text-align:center">Visible</th><th></th><th></th></tr></thead><tbody>'
+      + codes.map(c => {
+          const l = LANGS_CACHE[c];
+          const box = (flag, checked) => `<input type="checkbox" id="row-${flag}-${c}" ${checked ? 'checked' : ''}>`;
+          return `<tr><td><b>${c}</b></td><td>${l.name}</td><td>${l.native || ''}</td>`
+               + `<td style="text-align:center">${box('fields', l.fields)}</td>`
+               + `<td style="text-align:center">${box('chrome', l.chrome)}</td>`
+               + `<td style="text-align:center">${box('visible', l.visible)}</td>`
+               + `<td><button class="btn ghost" style="padding:5px 10px" onclick="saveRow('${c}')">Save</button></td>`
+               + `<td><span class="muted" id="row-status-${c}"></span></td></tr>`;
+        }).join('')
+      + '</tbody></table>';
+  } catch (e) {
+    box.innerHTML = '<div class="muted">Could not load — is the dashboard connected to WordPress?</div>';
+  }
+}
+
+async function saveRow(code) {
+  const l = LANGS_CACHE[code];
+  const status = document.getElementById(`row-status-${code}`);
+  status.textContent = 'Saving…';
+  try {
+    const res = await (await fetch('/api/languages', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        code, name: l.name, native: l.native,
+        fields: document.getElementById(`row-fields-${code}`).checked,
+        chrome: document.getElementById(`row-chrome-${code}`).checked,
+        visible: document.getElementById(`row-visible-${code}`).checked,
+      }),
+    })).json();
+    status.textContent = 'Saved.';
+    showLog(res.log);
+    loadLanguages();
+  } catch (e) {
+    status.textContent = 'Failed: ' + e;
+  }
+}
+
+function showLog(lines) {
+  const log = document.getElementById('log');
+  log.textContent = (lines || []).join('\n');
+  log.style.display = 'block';
+}
+
+let SARVAM_LANGS = {};
+let usingOther = false;
+
+async function loadSarvamLangs() {
+  SARVAM_LANGS = await (await fetch('/api/sarvam_languages')).json();
+  const sel = document.getElementById('new-select');
+  sel.innerHTML = '<option value="">Select a language…</option>'
+    + Object.keys(SARVAM_LANGS).map(code =>
+        `<option value="${code}">${SARVAM_LANGS[code].name} (${code})</option>`).join('')
+    + '<option value="__other__">Other / not listed (no audio support)…</option>';
+}
+function toggleOther(e) {
+  if (e) e.preventDefault();
+  usingOther = true;
+  document.getElementById('new-select').value = '__other__';
+  document.getElementById('other-fields').style.display = 'flex';
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('new-select').addEventListener('change', function () {
+    usingOther = this.value === '__other__';
+    document.getElementById('other-fields').style.display = usingOther ? 'flex' : 'none';
+  });
+});
+
+async function addLanguage() {
+  let code, name;
+  const selected = document.getElementById('new-select').value;
+  if (selected && selected !== '__other__') {
+    code = selected;
+    name = SARVAM_LANGS[selected].name;
+  } else {
+    code = document.getElementById('new-code').value.trim().toLowerCase();
+    name = document.getElementById('new-name').value.trim();
+  }
+  if (!code || !name) { document.getElementById('add-status').textContent = 'Pick a language, or enter a code and name under "Add it manually".'; return; }
+  const btn = document.getElementById('add-btn');
+  const status = document.getElementById('add-status');
+  btn.disabled = true;
+  status.textContent = 'Adding… this can take a little while (translation + sync).';
+  try {
+    const res = await (await fetch('/api/languages', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        code, name,
+        fields: document.getElementById('opt-fields').checked,
+        chrome: document.getElementById('opt-chrome').checked,
+        visible: document.getElementById('opt-visible').checked,
+      }),
+    })).json();
+    status.textContent = 'Done.';
+    showLog(res.log);
+    document.getElementById('new-select').value = '';
+    document.getElementById('new-code').value = '';
+    document.getElementById('new-name').value = '';
+    document.getElementById('other-fields').style.display = 'none';
+    loadLanguages();
+  } catch (e) {
+    status.textContent = 'Failed: ' + e;
+  }
+  btn.disabled = false;
+}
+
+async function syncAll() {
+  const btn = document.getElementById('sync-btn');
+  const status = document.getElementById('sync-status');
+  btn.disabled = true;
+  status.textContent = 'Syncing…';
+  try {
+    const res = await (await fetch('/api/sync_languages', { method: 'POST' })).json();
+    status.textContent = 'Done.';
+    showLog(res.log);
+  } catch (e) {
+    status.textContent = 'Failed: ' + e;
+  }
+  btn.disabled = false;
+}
+
+loadLanguages();
+loadSarvamLangs();
+</script>
+</body>
+</html>

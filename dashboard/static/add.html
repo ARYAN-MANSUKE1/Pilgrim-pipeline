@@ -12,6 +12,7 @@
     <a href="/">Home</a>
     <a href="/process">Process Temples</a>
     <a href="/add" class="active">Add Temple</a>
+    <a href="/languages">Languages</a>
   </nav>
 
   <div class="wrap" style="max-width:820px">
@@ -69,22 +70,28 @@
   </div>
 
 <script>
-const LANGS = ["mr","en","hi","gj","ta","te","ml","kn"];
-const NAMES = {mr:"Marathi",en:"English",hi:"Hindi",gj:"Gujarati",ta:"Tamil",te:"Telugu",ml:"Malayalam",kn:"Kannada"};
+// Populated from /api/all_langs (server-driven), not hardcoded -- so a
+// language added/removed via the dashboard shows up here automatically.
+let LANGS = [];
+let NAMES = {};
 function buildMatrix() {
   const src = document.getElementById('src').value;
   document.getElementById('matrixbody').innerHTML = LANGS.map(l => {
     const isSrc = (l === src);  // source is never translated
     const trCell = isSrc ? '<span class="muted">source</span>'
                          : `<input type="checkbox" class="tr" data-l="${l}" checked>`;
-    return `<tr><td>${NAMES[l]}</td>
+    return `<tr><td>${NAMES[l] || l}</td>
       <td style="text-align:center">${trCell}</td>
       <td style="text-align:center"><input type="checkbox" class="au" data-l="${l}"></td></tr>`;
   }).join('');
 }
 function setCol(cls, on){ document.querySelectorAll('.'+cls).forEach(c=>c.checked=on); }
 document.getElementById('src').addEventListener('change', buildMatrix);
-buildMatrix();
+(async function () {
+  const data = await (await fetch('/api/all_langs')).json();
+  LANGS = data.langs; NAMES = data.names;
+  buildMatrix();
+})();
 
 async function create() {
   const title = document.getElementById('title').value.trim();
