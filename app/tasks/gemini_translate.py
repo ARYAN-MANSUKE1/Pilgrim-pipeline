@@ -47,6 +47,10 @@ _SYSTEM = (
     "notes, or explanations."
 )
 
+class EmptyTranslation(RuntimeError):
+    """Gemini answered 200 but with no usable text. Usually transient."""
+
+
 _SAFETY = [
     {"category": c, "threshold": "BLOCK_NONE"}
     for c in (
@@ -104,7 +108,10 @@ def _endpoint_url() -> str:
 @retry(
     stop=stop_after_attempt(4),
     wait=wait_exponential(multiplier=1, min=2, max=30),
-    retry=retry_if_exception_type((httpx.HTTPError,)),
+    # EmptyTranslation included: Gemini intermittently returns a candidate with
+    # no text, and that used to lose a language permanently -- the retry only
+    # covered HTTP errors, and an empty body is a 200.
+    retry=retry_if_exception_type((httpx.HTTPError, EmptyTranslation)),
     reraise=True,
 )
 def translate(text: str, source_lang: str, target_lang: str) -> str:
@@ -136,7 +143,7 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     candidates = data.get("candidates") or []
     if not candidates:
         reason = (data.get("promptFeedback") or {}).get("blockReason")
-        raise RuntimeError(f"Gemini returned no candidates (blockReason={reason})")
+        raise EmptyTranslation(f"Gemini returned no candidates (blockReason={reason})")
 
     cand = candidates[0]
     parts = (cand.get("content") or {}).get("parts") or []
@@ -145,7 +152,13 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     if cand.get("finishReason") == "MAX_TOKENS":
         logger.warning("Gemini hit MAX_TOKENS; translation may be truncated (len=%d).", len(out))
     if not out:
-        raise RuntimeError("Gemini returned empty text")
+        # Say WHY. "empty text" alone told us nothing when Malayalam dropped out
+        # of a temple mid-run; finishReason distinguishes a transient blip from a
+        # SAFETY/RECITATION block that will never succeed.
+        raise EmptyTranslation(
+            f"Gemini returned empty text (finishReason={cand.get('finishReason')}, "
+            f"safety={cand.get('safetyRatings')})"
+        )
     return out
 
 
