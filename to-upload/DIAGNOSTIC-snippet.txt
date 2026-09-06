@@ -1,0 +1,51 @@
+/* ===== TEMPORARY DIAGNOSTIC - REMOVE AFTER USE =====
+   Read-only. Prints PHP's prepend settings and the /tmp files the log named.
+   Guarded so only a logged-in administrator can trigger it.
+   Visit:  https://pilgrimdata.in/wp-admin/?pilgrim_peek=1
+*/
+add_action( 'admin_init', function () {
+    if ( ! isset( $_GET['pilgrim_peek'] ) || ! current_user_can( 'manage_options' ) ) {
+        return;
+    }
+    header( 'Content-Type: text/plain; charset=utf-8' );
+
+    echo "=== QUESTION 2: is something being prepended to every PHP file? ===\n";
+    echo "auto_prepend_file : " . var_export( ini_get( 'auto_prepend_file' ), true ) . "\n";
+    echo "auto_append_file  : " . var_export( ini_get( 'auto_append_file' ), true ) . "\n";
+    echo "loaded php.ini    : " . php_ini_loaded_file() . "\n";
+    echo "scanned .ini dirs : " . php_ini_scanned_files() . "\n";
+    echo "open_basedir      : " . var_export( ini_get( 'open_basedir' ), true ) . "\n";
+    echo "PHP version       : " . PHP_VERSION . "\n\n";
+
+    echo "=== .user.ini / .htaccess in the web root ===\n";
+    foreach ( array( '.user.ini', '.htaccess' ) as $f ) {
+        $p = ABSPATH . $f;
+        echo "--- $p " . ( file_exists( $p ) ? "(" . filesize( $p ) . " bytes, modified " . date( 'Y-m-d H:i', filemtime( $p ) ) . ")" : "(not present)" ) . "\n";
+        if ( file_exists( $p ) ) {
+            echo htmlspecialchars( (string) @file_get_contents( $p ) ) . "\n";
+        }
+    }
+
+    echo "\n=== QUESTION 1: the /tmp files the error log named ===\n";
+    foreach ( array( '/tmp/.system', '/tmp/.config' ) as $f ) {
+        if ( ! @file_exists( $f ) ) {
+            echo "--- $f : not present now\n";
+            continue;
+        }
+        echo "--- $f : " . filesize( $f ) . " bytes, modified " . date( 'Y-m-d H:i', filemtime( $f ) ) . "\n";
+        echo htmlspecialchars( substr( (string) @file_get_contents( $f ), 0, 3000 ) ) . "\n";
+    }
+
+    echo "\n=== the file that is actually failing ===\n";
+    $t = WP_PLUGIN_DIR . '/tenweb-builder/widgets/image-sprite/image-sprite.php';
+    echo "$t : " . ( file_exists( $t ) ? filesize( $t ) . " bytes, modified " . date( 'Y-m-d H:i', filemtime( $t ) ) : "missing" ) . "\n";
+    if ( file_exists( $t ) ) {
+        echo "first 6 lines:\n";
+        $lines = array_slice( file( $t ), 0, 6 );
+        foreach ( $lines as $i => $l ) {
+            echo sprintf( "%2d| %s", $i + 1, htmlspecialchars( $l ) );
+        }
+    }
+    exit;
+} );
+/* ===== END DIAGNOSTIC ===== */

@@ -30,3 +30,11 @@ _slider_*.txt
 _push_rows.json
 migrate_run.log
 *.mp3
+
+# rumik trial output (audio files, not source)
+rumik/out/
+
+# never commit: live DB credentials, auth salts, redis password
+wp-config.php
+# 258MB of WordPress debug output pulled off the server for diagnosis
+debug.log
