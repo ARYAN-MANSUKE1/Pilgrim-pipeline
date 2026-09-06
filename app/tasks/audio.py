@@ -438,7 +438,14 @@ def _synthesize_chunk(text: str, lang_code: str) -> List[bytes]:
         "Content-Type": "application/json",
     }
     resp = httpx.post(settings.sarvam_tts_url, json=payload, headers=headers, timeout=60)
-    resp.raise_for_status()
+    if resp.status_code >= 400:
+        # httpx's own message is just the status code; Sarvam puts the actual
+        # reason (bad speaker, text too long, unsupported language) in the body,
+        # and without it a 400 in a bulk run is undebuggable.
+        raise httpx.HTTPStatusError(
+            f"{resp.status_code} from Sarvam TTS (lang={lang_code}, {len(text)} chars): {resp.text[:500]}",
+            request=resp.request, response=resp,
+        )
 
     audios = resp.json().get("audios") or []
     if not audios:
