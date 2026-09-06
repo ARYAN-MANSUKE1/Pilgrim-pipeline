@@ -20,6 +20,7 @@ Usage:
     python migrate_to_live.py                 # dry run: says what it would do
     python migrate_to_live.py --go            # actually migrate
     python migrate_to_live.py --go --min-audio 10   # only fully-voiced temples
+    python migrate_to_live.py --go --temple 29090   # one temple, read from staging
     python migrate_to_live.py --go --only 5   # first 5 temples (test the path)
     python migrate_to_live.py --go --force    # overwrite live fields that already have data
 
@@ -52,6 +53,9 @@ ONLY = int(sys.argv[sys.argv.index("--only") + 1]) if "--only" in sys.argv else 
 # --min-audio N : only temples that already have N languages voiced on staging.
 # Used to migrate the fully-finished temples (all 10) ahead of the partial ones.
 MIN_AUDIO = int(sys.argv[sys.argv.index("--min-audio") + 1]) if "--min-audio" in sys.argv else 0
+# --temple ID : migrate one temple, read straight from staging rather than from
+# the inventory file (which is a snapshot and goes stale as more are processed).
+TEMPLE = int(sys.argv[sys.argv.index("--temple") + 1]) if "--temple" in sys.argv else None
 INVENTORY = Path("migrate_inventory.json")
 MIN_CHARS = 200   # same threshold the pipeline uses for "is this language translated"
 
@@ -147,6 +151,18 @@ def copy_audio(att_id: int, live_id: int, lang: str) -> int:
     return r.json()["id"]
 
 
+def inventory_for(post_id: int) -> dict:
+    """Build one temple's inventory entry live from staging."""
+    from app.tasks.source_detect import visible_text_length
+    t = _get(f"{STAGE}/temple/{post_id}", STAGE_AUTH, params={"context": "edit"}).json()
+    acf = t.get("acf") or {}
+    text = [l for l, f in wp.CONTENT_FIELD_KEYS.items()
+            if visible_text_length(acf.get(f) or "") >= MIN_CHARS]
+    audio = [l for l, f in wp.AUDIO_FIELD_KEYS.items() if acf.get(f)]
+    return {"id": t["id"], "slug": t.get("slug", ""), "text": text, "audio": audio,
+            "aids": [acf.get(wp.AUDIO_FIELD_KEYS[l]) for l in audio]}
+
+
 def preflight() -> None:
     """Confirm live is reachable and actually has the ACF fields we write.
 
@@ -182,7 +198,13 @@ def main() -> None:
 
     wp.refresh_language_fields()
     preflight()
-    items = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    if TEMPLE:
+        items = [inventory_for(TEMPLE)]
+        print(f"--temple {TEMPLE}: {items[0]['slug']}")
+        print("   text  " + ",".join(items[0]["text"]))
+        print("   audio " + (",".join(items[0]["audio"]) or "none"))
+    else:
+        items = json.loads(INVENTORY.read_text(encoding="utf-8"))
     if MIN_AUDIO:
         before = len(items)
         items = [i for i in items if len(i["audio"]) >= MIN_AUDIO]
