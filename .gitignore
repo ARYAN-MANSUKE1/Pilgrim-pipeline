@@ -55,3 +55,10 @@ quality_compare.json
 quality_compare.txt
 translation_compare.json
 translation_compare.txt
+
+# Sarvam refund correspondence -- business documents containing payment IDs,
+# account balances and a draft email. Kept local, not published to the repo.
+sarvam-refund-request.md
+sarvam-email-final.md
+sarvam-email-PASTE.txt
+sarvam-api-test-evidence.txt

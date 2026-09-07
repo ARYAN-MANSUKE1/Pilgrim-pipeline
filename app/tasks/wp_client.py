@@ -341,6 +341,7 @@ def write_title_and_content(post_id: int, lang: str, title: str, content: str) -
     logger.info("Wrote %s title+content → post %d", lang, post_id)
 
 
+@_wp_retry
 def write_all_translations(post_id: int, items: dict[str, tuple[str, str]]) -> None:
     """Write every language's title+content in ONE request.
 
@@ -349,6 +350,11 @@ def write_all_translations(post_id: int, items: dict[str, tuple[str, str]]) -> N
     measured on staging, 9 languages took 65.5s as separate posts and 2.9s
     batched (22.8x). Ceiling: one request is all-or-nothing, so a single bad
     field loses the whole batch; the caller falls back to per-language writes.
+
+    Retried like every other write here: the staging host drops connections in
+    bursts -- measured 10 failures in 40 plain sequential GETs, as ConnectError,
+    RemoteProtocolError and ReadTimeout. Without the retry one blip skipped
+    straight to the per-language path, turning a 25s temple into 4 minutes.
     """
     updates: dict[str, str] = {}
     for lang, (title, content) in items.items():
@@ -358,8 +364,12 @@ def write_all_translations(post_id: int, items: dict[str, tuple[str, str]]) -> N
             updates[CONTENT_FIELD_KEYS[lang]] = content
     if not updates:
         return
+    # 120s, matching the per-language path. The batch measures ~3s, so this is
+    # already 40x headroom -- and the host regularly APPLIES a write then never
+    # answers, so an over-long timeout just blocks a worker on work that is
+    # already done. Re-sending is safe: writing the same ACF fields is a no-op.
     resp = httpx.post(f"{_base()}/temple/{post_id}", json={"acf": updates},
-                      auth=_auth(), timeout=300)
+                      auth=_auth(), timeout=120)
     resp.raise_for_status()
     logger.info("Wrote %d languages to post %d in one request", len(items), post_id)
 
