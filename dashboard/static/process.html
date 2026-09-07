@@ -39,7 +39,8 @@
     </div>
 
     <h1 class="page" style="margin-top:26px">Jobs <span class="muted" id="qdepth"></span>
-      <button class="btn ghost" style="float:right;padding:6px 12px" onclick="clearJobs()">Clear finished</button></h1>
+      <button class="btn ghost" style="float:right;padding:6px 12px" onclick="clearJobs()">Clear finished</button>
+      <button class="btn ghost" id="stopall" style="float:right;padding:6px 12px;margin-right:8px;border-color:#b3261e;color:#b3261e" onclick="stopAll()">Stop all</button></h1>
     <div id="jobsbox"><div class="muted">No jobs yet — select temples below and run.</div></div>
     <div id="logview"></div>
   </div>
@@ -73,7 +74,10 @@
 // registry), not hardcoded -- so a language added/removed via the dashboard
 // shows up here automatically, no code change needed.
 let LANGS = [];
-const state = { page:1, pages:1, rows:[], selected:new Set() };
+// titles: id -> name for every temple seen this session. state.rows only ever
+// holds the 20 rendered rows, so without this a temple selected on page 10 and
+// queued from page 12 lost its name and showed as a bare "Temple 34038".
+const state = { page:1, pages:1, rows:[], selected:new Set(), titles:{} };
 
 async function load(page) {
   if (page < 1) return;
@@ -82,6 +86,7 @@ async function load(page) {
   const q = encodeURIComponent(document.getElementById('search').value || '');
   const data = await (await fetch(`/api/temples?page=${page}&per_page=20&search=${q}`)).json();
   state.rows = data.temples; state.pages = data.pages;
+  data.temples.forEach(t => { state.titles[t.id] = t.title; });
   // A remembered page can outlive the result set (e.g. a search narrows it).
   if (page > data.pages && data.pages >= 1) return load(data.pages);
   saveNav();
@@ -140,7 +145,9 @@ async function runSelected() {
     source: document.getElementById('src').value || null,
     translate_langs, audio_langs, force,
   };
-  state.selected.forEach(id=>{ if(!body.temples.find(x=>x.id===id)) body.temples.push({id,title:'Temple '+id}); });
+  // Temples selected on other pages: still queued, now with their real name.
+  state.selected.forEach(id=>{ if(!body.temples.find(x=>x.id===id))
+    body.temples.push({id, title: state.titles[id] || ('Temple '+id)}); });
   const res=await (await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   clearSel(); pollJobs(); alert(`Queued ${res.queued} temple(s).`);
 }
@@ -153,8 +160,17 @@ async function pollJobs() {
   const data=await (await fetch('/api/jobs')).json();
   document.getElementById('qdepth').textContent = data.queue_depth ? `(${data.queue_depth} in queue)`:'';
   if(!data.jobs.length){ document.getElementById('jobsbox').innerHTML='<div class="muted">No jobs yet.</div>'; return; }
-  document.getElementById('jobsbox').innerHTML='<table><thead><tr><th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th></tr></thead><tbody>'
-    + data.jobs.map(j=>`<tr onclick="viewLog(${j.id})" style="cursor:pointer"><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td></tr>`).join('')
+  const active = data.jobs.filter(j=>j.status==='queued'||j.status==='running').length;
+  document.getElementById('stopall').style.display = active ? '' : 'none';
+  document.getElementById('jobsbox').innerHTML='<table><thead><tr><th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th><th style="width:62px"></th></tr></thead><tbody>'
+    + data.jobs.map(j=>{
+        // Only queued/running jobs can be stopped; finished rows get no button.
+        const canStop = j.status==='queued' || j.status==='running';
+        const btn = canStop
+          ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;border-color:#b3261e;color:#b3261e" onclick="event.stopPropagation();stopJob(${j.id})">Stop</button>`
+          : '';
+        return `<tr onclick="viewLog(${j.id})" style="cursor:pointer"><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td><td>${btn}</td></tr>`;
+      }).join('')
     + '</tbody></table>';
   if (openLogId !== null) renderLog(openLogId);
 }
@@ -163,6 +179,23 @@ async function renderLog(id) {
   document.getElementById('logview').innerHTML = `<div class="logbox">#${id} ${j.temple_title}\n${(j.logs||[]).join('\n')}${j.error?('\nERROR: '+j.error):''}</div>`;
 }
 function viewLog(id) { openLogId = id; renderLog(id); }
+async function stopJob(id){
+  const r = await (await fetch(`/api/jobs/${id}/cancel`,{method:'POST'})).json();
+  // "stopping" means it was mid-run: it finishes the current step (so nothing
+  // already paid for is thrown away) and then stops.
+  if (r.result === 'stopping') alert(`Job #${id} is running — it will stop after the current step. Work already done is saved.`);
+  pollJobs();
+}
+async function stopAll(){
+  const n = document.querySelectorAll('#jobsbox button').length;
+  if(!confirm(`Stop all queued and running jobs?
+
+Anything already translated stays saved — you can re-queue later and it will only do what is missing.`)) return;
+  const r = await (await fetch('/api/jobs/cancel-all',{method:'POST'})).json();
+  alert(`Stopped ${r.cancelled} queued job(s).` + (r.stopping ? `
+${r.stopping} running job(s) will stop after the current step.` : ''));
+  pollJobs();
+}
 async function clearJobs(){ await fetch('/api/jobs/clear',{method:'POST'}); openLogId = null; pollJobs(); document.getElementById('logview').innerHTML=''; }
 function jumpTo(){ const p=parseInt(document.getElementById('jump').value,10); const max=state.pages||1;
   if(p>=1 && p<=max) load(p); else alert('Enter a page between 1 and '+max); }

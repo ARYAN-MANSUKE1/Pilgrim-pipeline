@@ -77,7 +77,7 @@
     </div>
 
     <div id="jobs">
-      <h2>Jobs <span class="muted" id="qdepth"></span> <button class="btn ghost" style="margin-left:auto;padding:4px 10px" onclick="clearJobs()">Clear finished</button></h2>
+      <h2>Jobs <span class="muted" id="qdepth"></span> <button class="btn ghost" id="stopall" style="margin-left:auto;padding:4px 10px;border-color:#b3261e;color:#b3261e" onclick="stopAll()">Stop all</button> <button class="btn ghost" style="padding:4px 10px" onclick="clearJobs()">Clear finished</button></h2>
       <div id="jobsbox"><div class="muted">No jobs yet — select temples below and run.</div></div>
       <div id="logview"></div>
     </div>
@@ -181,18 +181,40 @@ async function pollJobs() {
   const data = await (await fetch('/api/jobs')).json();
   document.getElementById('qdepth').textContent = data.queue_depth ? `(${data.queue_depth} in queue)` : '';
   if (!data.jobs.length) { document.getElementById('jobsbox').innerHTML='<div class="muted">No jobs yet.</div>'; return; }
-  const rows = data.jobs.map(j => `<tr onclick="viewLog(${j.id})" style="cursor:pointer">
+  const active = data.jobs.filter(j => j.status==='queued'||j.status==='running').length;
+  document.getElementById('stopall').style.display = active ? '' : 'none';
+  const rows = data.jobs.map(j => {
+    const canStop = j.status==='queued' || j.status==='running';
+    const btn = canStop
+      ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;border-color:#b3261e;color:#b3261e" onclick="event.stopPropagation();stopJob(${j.id})">Stop</button>`
+      : '';
+    return `<tr onclick="viewLog(${j.id})" style="cursor:pointer">
       <td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td>
       <td><span class="status ${j.status}">${j.status}</span></td>
-      <td class="muted" style="font-size:12px">${j.last||''}</td></tr>`).join('');
+      <td class="muted" style="font-size:12px">${j.last||''}</td><td>${btn}</td></tr>`;
+  }).join('');
   document.getElementById('jobsbox').innerHTML = `<table><thead><tr>
-      <th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th></tr></thead>
+      <th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th><th style="width:62px"></th></tr></thead>
       <tbody>${rows}</tbody></table>`;
 }
 async function viewLog(id) {
   const j = await (await fetch('/api/jobs/'+id)).json();
   document.getElementById('logview').innerHTML =
     `<div class="logbox">#${id} ${j.temple_title}\n${(j.logs||[]).join('\n')}${j.error?('\nERROR: '+j.error):''}</div>`;
+}
+async function stopJob(id){
+  const r = await (await fetch(`/api/jobs/${id}/cancel`,{method:'POST'})).json();
+  if (r.result === 'stopping') alert(`Job #${id} is running — it will stop after the current step. Work already done is saved.`);
+  pollJobs();
+}
+async function stopAll(){
+  if(!confirm('Stop all queued and running jobs?
+
+Anything already translated stays saved — re-queueing later only does what is missing.')) return;
+  const r = await (await fetch('/api/jobs/cancel-all',{method:'POST'})).json();
+  alert(`Stopped ${r.cancelled} queued job(s).` + (r.stopping ? `
+${r.stopping} running job(s) will stop after the current step.` : ''));
+  pollJobs();
 }
 async function clearJobs(){ await fetch('/api/jobs/clear',{method:'POST'}); pollJobs(); document.getElementById('logview').innerHTML=''; }
 

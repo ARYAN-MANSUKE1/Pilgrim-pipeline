@@ -327,6 +327,19 @@ def job_detail(jid: int):
     return jobs.get_job(jid) or {"error": "not found"}
 
 
+@app.post("/api/jobs/cancel-all")
+def cancel_all_jobs():
+    """Stop every queued and running job. Queued jobs stop immediately; running
+    ones stop at their next safe point, after saving work already paid for."""
+    return jobs.cancel_all()
+
+
+@app.post("/api/jobs/{jid}/cancel")
+def cancel_job(jid: int):
+    """Stop one job, queued or running."""
+    return {"id": jid, "result": jobs.cancel(jid)}
+
+
 @app.post("/api/jobs/clear")
 def clear_jobs():
     return {"cleared": jobs.clear_finished()}

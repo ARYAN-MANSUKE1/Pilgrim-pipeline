@@ -47,6 +47,27 @@ _SYSTEM = (
     "notes, or explanations."
 )
 
+# Gemini 3.x renamed thinkingBudget -> thinkingLevel. Set once if the model
+# rejects our first guess, so we send the other spelling instead of none.
+_THINKING_SWAPPED = False
+
+
+def _thinking_cfg() -> dict:
+    """The knob that keeps thinking off -- worth getting right.
+
+    2.5 models take thinkingBudget 0 (thinking fully off). Gemini 3.x renamed it
+    to thinkingLevel and cannot disable thinking at all; "minimal" is the floor.
+    Sending the wrong spelling is a bare 400, and the previous code answered that
+    400 by DELETING the field -- which does not mean "no thinking", it means "use
+    the model's default budget". That silently billed 2,413 thinking tokens per
+    call at the output rate: half of one real invoice. So never drop it, swap it.
+    """
+    three = "gemini-3" in settings.gemini_model
+    if _THINKING_SWAPPED:
+        three = not three
+    return {"thinkingLevel": "minimal"} if three else {"thinkingBudget": 0}
+
+
 class EmptyTranslation(RuntimeError):
     """Gemini answered 200 but with no usable text. Usually transient."""
 
@@ -116,6 +137,7 @@ def _endpoint_url() -> str:
 )
 def translate(text: str, source_lang: str, target_lang: str) -> str:
     """Translate plain text source_lang -> target_lang via Gemini. Retries on HTTP errors."""
+    global _THINKING_SWAPPED
     if not text or not text.strip():
         return text
 
@@ -124,17 +146,24 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     payload = {
         "systemInstruction": {"parts": [{"text": _SYSTEM.format(target=target)}]},
         "contents": [{"role": "user", "parts": [{"text": f"Translate this from {source} to {target}:\n\n{text}"}]}],
-        # thinkingBudget 0: gemini-2.5-flash reasons before answering by default,
-        # which cost ~1000 thought tokens and 2.6x the latency per call (measured
-        # 8.9s -> 3.4s) for no gain on a translation -- it only added embellishment
-        # ("the revered temple, showcasing...") over the literal source. Thought
-        # tokens bill as output at the output rate, so this is cheaper too.
+        # Keep thinking at its floor: it adds no accuracy on a translation (only
+        # embellishment over the literal source) and thought tokens bill at the
+        # OUTPUT rate. Measured on 3.5-flash-lite: 2,413 thought tokens per call,
+        # 1.08x the visible output -- i.e. half the invoice, for nothing.
         "generationConfig": {"temperature": 0.3, "topP": 0.95, "maxOutputTokens": 16384,
-                             "thinkingConfig": {"thinkingBudget": 0}},
+                             "thinkingConfig": _thinking_cfg()},
         "safetySettings": _SAFETY,
     }
 
     resp = httpx.post(url, json=payload, headers=_auth_headers(), timeout=120)
+    # A 400 here usually means we guessed the wrong spelling for this model, so
+    # retry with the OTHER one -- never by removing it (see _thinking_cfg).
+    if resp.status_code == 400 and not _THINKING_SWAPPED:
+        _THINKING_SWAPPED = True
+        payload["generationConfig"]["thinkingConfig"] = _thinking_cfg()
+        logger.info("%s rejected thinkingConfig; retrying as %s",
+                    settings.gemini_model, payload["generationConfig"]["thinkingConfig"])
+        resp = httpx.post(url, json=payload, headers=_auth_headers(), timeout=120)
     resp.raise_for_status()
     data = resp.json()
 
@@ -183,7 +212,9 @@ def detect_language(text: str):
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         # No thinking needed for classification -> faster, cheaper, avoids empty output.
-        "generationConfig": {"temperature": 0, "maxOutputTokens": 64, "thinkingConfig": {"thinkingBudget": 0}},
+        # Same spelling rule as translate(): a hardcoded thinkingBudget 400s on 3.x.
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 64,
+                             "thinkingConfig": _thinking_cfg()},
         "safetySettings": _SAFETY,
     }
     resp = httpx.post(_endpoint_url(), json=payload, headers=_auth_headers(), timeout=60)

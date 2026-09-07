@@ -21,6 +21,7 @@ WP_BASE = settings.wp_url.rstrip("/") + "/wp-json/wp/v2"
 AUTH = (settings.wp_user, settings.wp_app_password)
 GEMINI_MAX = 6000
 AUDIO_WORKERS = settings.audio_workers   # languages voiced at once (.env: AUDIO_WORKERS)
+TRANSLATE_WORKERS = settings.translate_workers  # languages translated at once (.env: TRANSLATE_WORKERS)
 MIN_CHARS = 200
 
 
@@ -35,8 +36,15 @@ def _fetch(post_id: int) -> dict:
     return r.json()
 
 
+class Cancelled(RuntimeError):
+    """Raised when a job is asked to stop. Never raised in the middle of a
+    paid step: translations Gemini has already charged for are written to
+    WordPress first, so stopping costs progress but never money."""
+
+
 def process_temple(post_id, operation="full", languages=None, source=None, log=print,
-                   translate_langs=None, audio_langs=None, force=False):
+                   translate_langs=None, audio_langs=None, force=False,
+                   should_cancel=None):
     """
     Two ways to call:
       • batch mode  — operation ('translate'|'audio'|'full') + languages list.
@@ -52,16 +60,23 @@ def process_temple(post_id, operation="full", languages=None, source=None, log=p
     # CSV export can total it. Cleared in the finally below.
     costs.set_temple(post_id)
     try:
-        _process(post_id, operation, languages, source, log, translate_langs, audio_langs, force)
+        _process(post_id, operation, languages, source, log, translate_langs,
+                 audio_langs, force, should_cancel)
     finally:
         costs.set_temple(None)
 
 
-def _process(post_id, operation, languages, source, log, translate_langs, audio_langs, force):
+def _process(post_id, operation, languages, source, log, translate_langs, audio_langs,
+             force, should_cancel=None):
     # Pick up any language added via the dashboard's /languages registry since
     # the last refresh, so its ACF field keys are known before we need them.
     wp.refresh_language_fields()
 
+    def _stop_if_asked(stage: str) -> None:
+        if should_cancel and should_cancel():
+            raise Cancelled(stage)
+
+    _stop_if_asked("before starting")
     post = _fetch(post_id)
     acf = post.get("acf") or {}
     slug = post.get("slug", f"temple-{post_id}")
@@ -111,7 +126,11 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
 
         results = {}
         log(f"translating {len(to_translate)} language(s) in parallel…")
-        with ThreadPoolExecutor(max_workers=min(len(to_translate), 8)) as ex:
+        # One worker per language: capped at 8 this used to leave the 9th
+        # (usually pa) queued behind the others, adding ~10s of pure wait
+        # to every temple. Gemini is billed per call, not per second, so
+        # width costs nothing; TRANSLATE_WORKERS caps it if Gemini 429s.
+        with ThreadPoolExecutor(max_workers=min(len(to_translate), TRANSLATE_WORKERS)) as ex:
             # copy_context: costs.set_temple lives in a ContextVar, and a pool
             # thread starts with an empty context unless we carry ours in.
             futs = {ex.submit(copy_context().run, _translate_one, t): t for t in to_translate}
@@ -123,21 +142,55 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
                     log(f"[{tgt}] translated ({len(html)} chars)")
                 except Exception as e:  # one language failing shouldn't kill the rest
                     log(f"[{tgt}] TRANSLATE FAILED: {e}")
-        # Written back sequentially (avoid racing ACF writes), and each language
-        # guarded on its own: the staging host can take 45s+ under load, and a
-        # single timeout used to raise out of this loop and throw away every
-        # remaining translation -- work Gemini had already charged for.
+        # Write-back is one request for all languages, with a per-language
+        # fallback: the staging host can take 45s+ under load, and a single
+        # timeout must never throw away translations Gemini already charged for.
         written = []
-        for tgt in to_translate:  # write back sequentially (avoid racing ACF writes)
-            if tgt in results:
-                title, html = results[tgt]
-                try:
-                    wp.write_title_and_content(post_id, tgt, title, html)
-                    content[tgt] = html
-                    written.append(tgt)
-                except Exception as e:  # noqa: BLE001 -- keep the other languages
-                    log(f"[{tgt}] WRITE FAILED (translation kept, not saved): {e}")
+        ready = {t: results[t] for t in to_translate if t in results}
+        # One request for every language: WordPress charges its overhead per
+        # request, not per field (measured 65.5s -> 2.9s for 9 languages).
+        if ready:
+            try:
+                wp.write_all_translations(post_id, ready)
+                written = list(ready)
+                for tgt in written:
+                    content[tgt] = ready[tgt][1]
+            except Exception as e:  # noqa: BLE001 -- batch is all-or-nothing
+                log(f"batched write failed ({e}); retrying one language at a time")
+        # Fallback: the batch is all-or-nothing, so on failure go back to the
+        # slow path, which saves whatever it can rather than losing everything.
+        if ready and not written:
+            for tgt in to_translate:
+                if tgt in results:
+                    title, html = results[tgt]
+                    try:
+                        wp.write_title_and_content(post_id, tgt, title, html)
+                        content[tgt] = html
+                        written.append(tgt)
+                    except Exception as e:  # noqa: BLE001 -- keep the other languages
+                        log(f"[{tgt}] WRITE FAILED (translation kept, not saved): {e}")
         log(f"wrote {len(written)}/{len(to_translate)} language(s) to WordPress")
+        # Wrote nothing at all -> the job must FAIL, not report success. 151
+        # temples were marked "done" with 0/9 written when Gemini's prepaid
+        # credits ran out: every language 429'd, the loop completed, and the
+        # queue marched on reporting success. A temple that produced nothing
+        # has to be visibly broken so it can be re-queued.
+        # Partial counts as broken too: when the prepaid balance hovers at zero,
+        # per-language calls are authorised independently, so one temple can end
+        # up 6/9 written and still look finished. The languages that did write
+        # are already saved, and a re-run only fills the gaps (the "already has
+        # content" guard above), so failing here loses nothing and keeps the
+        # shortfall visible instead of silently shipping a half-done temple.
+        if len(written) < len(to_translate):
+            raise RuntimeError(
+                f"only {len(written)}/{len(to_translate)} languages written "
+                f"({','.join(l for l in to_translate if l not in written)} missing) - "
+                "check the translation provider's credits/quota"
+            )
+
+    # Stop here if asked: translation is written, so nothing paid for is lost,
+    # and audio (the expensive half) has not started.
+    _stop_if_asked("after translation, before audio")
 
     # --- audio (uses freshly-translated content where available) ---
     # Same "don't redo work that's already there" principle as translate:
@@ -163,6 +216,10 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         def _audio_one(lang):
+            # Checked per language: audio is the expensive half, so a stop
+            # request must not have to wait for all 10 to finish. Whatever is
+            # already uploaded stays -- only the unstarted ones are skipped.
+            _stop_if_asked(f"before {lang} audio")
             wp.generate_and_save(strip_tags(content[lang]), lang, post_id, slug)
 
         log(f"generating audio for {len(todo)} language(s), {AUDIO_WORKERS} at a time…")

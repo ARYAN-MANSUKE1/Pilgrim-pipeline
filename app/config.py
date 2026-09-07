@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     # throughput ceiling. Two concurrent temples pushed a WP GET from 0.3s to
     # 55s and timed out every write. Costs are ContextVar-isolated
     # (app/tasks/costs.py), so raising this is safe the day WP can take it.
+    translate_workers: int = 10   # languages translated at once; 10 = all of them
     job_workers: int = 1
     audio_workers: int = 3   # languages voiced concurrently within one temple
 
@@ -57,13 +58,15 @@ class Settings(BaseSettings):
     sheet_limit: int = 30      # rows to keep in the sheet; 0 = every temple
 
     # --- Cost accounting (INR) ---
-    # Sarvam rate is from full-site-cost.pdf (bills per character spoken);
-    # Gemini rates are Google's list price for gemini-2.5-flash -- .env sets
-    # GEMINI_MODEL=gemini-2.5-flash, overriding the 2.0 default above, so these
-    # must track 2.5. If you ever switch the model back, change these too.
+    # Sarvam rate is from full-site-cost.pdf (bills per character spoken).
+    # Gemini rates track gemini-3.5-flash-lite ($0.30/$2.50 per 1M), set in .env.
+    # gemini-2.5-flash is closed to new API projects -- a fresh key returns 404
+    # "no longer available to new users" -- and 3.5-flash-lite is the same price,
+    # so the rates below did not change when we migrated. If the model changes
+    # again, update these: 3.5-flash is 5x the input and 3.6x the output cost.
     sarvam_inr_per_10k_chars: float = 15.0   # Bulbul v2; v3 bills 2x (applied automatically)
-    gemini_usd_per_1m_input: float = 0.30    # gemini-2.5-flash list price
-    gemini_usd_per_1m_output: float = 2.50
+    gemini_usd_per_1m_input: float = 0.25    # gemini-3.1-flash-lite list price
+    gemini_usd_per_1m_output: float = 1.50   # billed output INCLUDES thinking tokens
     usd_inr: float = 88.0
 
     # --- Cloudflare R2 (S3-compatible, future) ---

@@ -38,3 +38,20 @@ rumik/out/
 wp-config.php
 # 258MB of WordPress debug output pulled off the server for diagnosis
 debug.log
+
+# Local measurement/scan output -- regenerable by re-running the scans, and
+# a point-in-time snapshot of staging rather than source.
+scan_staging.json
+scan_lengths.json
+scan_now.json
+measured_*.json
+modified_recent.json
+work_inventory.json
+usable_models.json
+ready_10_languages.json
+retranslate_needed.json
+quality_test_picks.json
+quality_compare.json
+quality_compare.txt
+translation_compare.json
+translation_compare.txt

@@ -39,7 +39,8 @@
       </div>
     </div>
 
-    <h1 class="page">Recent jobs</h1>
+    <h1 class="page">Recent jobs
+      <button class="btn ghost" id="stopall" style="float:right;padding:6px 12px;border-color:#b3261e;color:#b3261e" onclick="stopAll()">Stop all</button></h1>
     <div id="jobsbox"><div class="muted">No jobs yet.</div></div>
   </div>
 
@@ -54,10 +55,32 @@ async function load() {
   } catch(e){}
   const data = await (await fetch('/api/jobs')).json();
   const jobs = data.jobs.slice(0, 12);
+  const active = data.jobs.filter(j => j.status==='queued'||j.status==='running').length;
+  document.getElementById('stopall').style.display = active ? '' : 'none';
   if (!jobs.length) { document.getElementById('jobsbox').innerHTML = '<div class="muted">No jobs yet — run something from Process or Add.</div>'; return; }
-  document.getElementById('jobsbox').innerHTML = '<table><thead><tr><th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th></tr></thead><tbody>'
-    + jobs.map(j => `<tr><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td></tr>`).join('')
+  document.getElementById('jobsbox').innerHTML = '<table><thead><tr><th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th><th style="width:62px"></th></tr></thead><tbody>'
+    + jobs.map(j => {
+        const canStop = j.status==='queued' || j.status==='running';
+        const btn = canStop
+          ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;border-color:#b3261e;color:#b3261e" onclick="stopJob(${j.id})">Stop</button>`
+          : '';
+        return `<tr><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td><td>${btn}</td></tr>`;
+      }).join('')
     + '</tbody></table>';
+}
+async function stopJob(id){
+  const r = await (await fetch(`/api/jobs/${id}/cancel`,{method:'POST'})).json();
+  if (r.result === 'stopping') alert(`Job #${id} is running — it will stop after the current step. Work already done is saved.`);
+  load();
+}
+async function stopAll(){
+  if(!confirm('Stop all queued and running jobs?
+
+Anything already translated stays saved — re-queueing later only does what is missing.')) return;
+  const r = await (await fetch('/api/jobs/cancel-all',{method:'POST'})).json();
+  alert(`Stopped ${r.cancelled} queued job(s).` + (r.stopping ? `
+${r.stopping} running job(s) will stop after the current step.` : ''));
+  load();
 }
 load(); setInterval(load, 3000);
 </script>

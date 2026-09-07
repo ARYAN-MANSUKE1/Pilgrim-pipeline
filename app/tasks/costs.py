@@ -82,7 +82,11 @@ def record_translation(usage: dict | None, lang: str = "") -> None:
     if tid is None or not usage:
         return
     in_tok = int(usage.get("promptTokenCount") or 0)
-    out_tok = int(usage.get("candidatesTokenCount") or 0)
+    # thoughtsTokenCount is reported SEPARATELY from candidatesTokenCount but is
+    # billed at the output rate ("Output price (including thinking tokens)").
+    # Omitting it once hid 58% of a real bill -- always add it in.
+    out_tok = (int(usage.get("candidatesTokenCount") or 0)
+               + int(usage.get("thoughtsTokenCount") or 0))
     if not (in_tok or out_tok):
         return
     _append({"temple_id": tid, "kind": "translation", "lang": lang,
