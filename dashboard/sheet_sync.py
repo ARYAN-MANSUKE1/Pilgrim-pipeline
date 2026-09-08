@@ -29,6 +29,7 @@ from __future__ import annotations
 import threading
 
 import httpx
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.config import settings
 
@@ -142,6 +143,18 @@ def _ensure_rows(headers: dict, needed: int) -> None:
 _sync_lock = threading.Lock()
 
 
+# Google answers 503/429 in bursts. Every other network path in this project
+# retries; this one did not, so each blip silently dropped that temple's row
+# and the sheet drifted 268 rows behind over one overnight run.
+_sheet_retry = retry(
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=1, min=2, max=15),
+    retry=retry_if_exception_type((httpx.HTTPError,)),
+    reraise=True,
+)
+
+
+@_sheet_retry
 def sync(desired: list[list]) -> dict:
     """Read the sheet, update the progress columns, append any new temples.
 

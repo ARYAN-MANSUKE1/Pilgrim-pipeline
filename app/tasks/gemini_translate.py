@@ -42,9 +42,19 @@ _SYSTEM = (
     # (Devanagari 130 fed to Kannada came back as "one three zero").
     "Write all digits in {target}'s own numeral script, never Western/ASCII "
     "digits, and never in another language's numerals. Phone numbers included. "
-    "Preserve any placeholder tokens (for example zZqSEGqZz) and symbols exactly "
-    "as given, in the same positions. Return ONLY the translation — no quotes, "
-    "notes, or explanations."
+    # Never put a literal example token in this prompt: the model copied the old
+    # sample string ("zZqSEGqZz") straight into 127 published translations, once
+    # in place of a distance in km. Describe the rule, do not demonstrate it.
+    "Preserve any placeholder tokens and symbols exactly as given, in the same "
+    "positions, but never invent one and never copy an example from these "
+    "instructions into your answer. "
+    # Latin-script leaks: 12% of temples came back with an English word left in
+    # the middle of Indic text ("chandelier", "labyrinth", "worm"), which a
+    # reader notices immediately.
+    "Write every word in {target}'s own script. Do not leave English words in "
+    "the output; translate them. The only Latin text allowed is inside URLs, "
+    "email addresses and established acronyms (GSRTC, BAPS). "
+    "Return ONLY the translation — no quotes, notes, or explanations."
 )
 
 # Gemini 3.x renamed thinkingBudget -> thinkingLevel. Set once if the model
