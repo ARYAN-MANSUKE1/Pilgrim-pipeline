@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextvars
 import json
 import threading
+from datetime import date
 from pathlib import Path
 
 from app.config import settings
@@ -49,6 +50,7 @@ def set_temple(temple_id: int | None) -> None:
 
 def _append(row: dict) -> None:
     """Best-effort -- a ledger write must never break a pipeline run."""
+    row["day"] = date.today().isoformat()  # for "spent today"; rows before this have none
     try:
         with _lock:
             with LEDGER.open("a", encoding="utf-8") as f:
@@ -109,6 +111,47 @@ def totals() -> dict[int, dict[str, float]]:
     return out
 
 
+def spent_on(day: str) -> dict[str, float]:
+    """{"translation": inr, "audio": inr} recorded on one day (YYYY-MM-DD)."""
+    out = {"translation": 0.0, "audio": 0.0}
+    if not LEDGER.exists():
+        return out
+    with LEDGER.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                row = json.loads(line)
+                if row.get("day") == day:
+                    out[row["kind"]] += float(row["inr"])
+            except Exception:
+                continue
+    return {k: round(v, 2) for k, v in out.items()}
+
+
+def per_language_inr() -> dict[str, float]:
+    """Measured average cost of ONE language of one temple, {"translation", "audio"},
+    from the ledger's dated (recent-pricing) rows. Falls back to the PDF averages
+    until there are at least 20 temple-languages of history."""
+    sums: dict[tuple, float] = {}
+    if LEDGER.exists():
+        with LEDGER.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                    if row.get("day"):
+                        key = (row["kind"], row["temple_id"], row["lang"])
+                        sums[key] = sums.get(key, 0.0) + float(row["inr"])
+                except Exception:
+                    continue
+    out = {}
+    for kind, i in (("translation", 0), ("audio", 1)):
+        vals = [v for (k, _, _), v in sums.items() if k == kind]
+        pdf = [v[i] for v in PDF_EST.values() if v[i]]
+        # the PDF audio averages are Bulbul v2; v3 bills 2x per character
+        scale = 2.0 if kind == "audio" and "v3" in settings.sarvam_model else 1.0
+        out[kind] = round(sum(vals) / len(vals), 2) if len(vals) >= 20 else round(scale * sum(pdf) / len(pdf), 2)
+    return out
+
+
 def estimate(text_langs, audio_langs, source: str = "") -> dict[str, float]:
     """PDF-average fallback for temples processed before cost logging existed."""
     tr = sum(PDF_EST.get(l, (0.0, 0.0))[0] for l in text_langs if l != source)
@@ -117,7 +160,8 @@ def estimate(text_langs, audio_langs, source: str = "") -> dict[str, float]:
 
 
 if __name__ == "__main__":  # self-check: python -m app.tasks.costs
-    assert round(audio_inr(10_000), 2) == 15.0, audio_inr(10_000)          # PDF rate
+    v3 = "v3" in settings.sarvam_model
+    assert round(audio_inr(10_000), 2) == (30.0 if v3 else 15.0), audio_inr(10_000)  # v2 PDF rate, v3 2x
     assert round(translation_inr(1_000_000, 0), 2) == round(settings.gemini_usd_per_1m_input * settings.usd_inr, 2)
     e = estimate(["mr", "en", "hi"], ["mr", "en"], source="mr")
     assert e == {"translation": round(2.13 + 1.80, 2), "audio": round(7.50 + 8.82, 2)}, e

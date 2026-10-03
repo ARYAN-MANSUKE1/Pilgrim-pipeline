@@ -3,7 +3,7 @@ WordPress write-back client.
 
 Three operations:
   1. fetch_temple_text — GET ACF content field for a temple, returns plain text (HTML stripped)
-  2. upload_audio      — POST audio bytes to /wp/v2/media, returns attachment ID
+  2. upload_media      — POST file bytes (audio, photos) to /wp/v2/media, returns attachment ID
   3. set_audio_field   — PATCH ACF audio file field on a temple post with the attachment ID
 """
 
@@ -124,6 +124,9 @@ def _slugify(name: str) -> str:
     return slug.strip("_")
 
 
+_REGISTRY_ABSENT = False
+
+
 def refresh_language_fields() -> None:
     """
     Pull the language registry (pilgrim/v1/languages) and add field-key
@@ -137,9 +140,18 @@ def refresh_language_fields() -> None:
     known rather than raising, since a transient network issue here should
     never block temple processing for the languages that already work.
     """
+    global _REGISTRY_ABSENT
+    if _REGISTRY_ABSENT:
+        return
     try:
         url = settings.wp_url.rstrip("/") + "/wp-json/pilgrim/v1/languages"
         r = httpx.get(url, auth=_auth(), timeout=15)
+        if r.status_code == 404:
+            # The current theme has no registry (it lived in the old Hello Elementor
+            # theme). Asked once per process, not on every page view and job.
+            _REGISTRY_ABSENT = True
+            logger.info("No language registry on %s; using the built-in 10 languages.", settings.wp_url)
+            return
         r.raise_for_status()
         langs = r.json()
     except Exception as e:
@@ -400,9 +412,9 @@ def fetch_temple_text(post_id: int, lang: str) -> str:
 
 
 @_wp_retry
-def upload_audio(data: bytes, filename: str, content_type: str) -> int:
+def upload_media(data: bytes, filename: str, content_type: str) -> int:
     """
-    Upload audio bytes to the WP Media Library.
+    Upload a file (audio, photo) to the WP Media Library.
     Returns the new attachment ID.
     """
     url = f"{_base()}/media"
@@ -459,6 +471,6 @@ def generate_and_save(
         logger.warning("WP creds not set — audio generated (%d bytes) but NOT uploaded.", len(data))
         return None
 
-    attachment_id = upload_audio(data, filename, content_type)
+    attachment_id = upload_media(data, filename, content_type)
     set_audio_field(temple_id, lang, attachment_id)
     return attachment_id

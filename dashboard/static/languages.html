@@ -12,6 +12,7 @@
     <a href="/">Home</a>
     <a href="/process">Process Temples</a>
     <a href="/add">Add Temple</a>
+    <a href="/ads">Ads</a>
     <a href="/languages" class="active">Languages</a>
   </nav>
 
@@ -69,6 +70,7 @@
     <pre id="log" style="display:none; max-height:320px; overflow:auto; background:#0002; padding:10px; border-radius:8px; font-size:13px; white-space:pre-wrap"></pre>
   </div>
 
+<script src="/static/status.js"></script>
 <script>
 let LANGS_CACHE = {};
 
@@ -76,6 +78,12 @@ async function loadLanguages() {
   const box = document.getElementById('langtable');
   try {
     LANGS_CACHE = await (await fetch('/api/languages')).json();
+    if (LANGS_CACHE.error) {
+      box.innerHTML = `<div class="muted" style="color:#8a1c12">${LANGS_CACHE.error}</div>`;
+      ['add-btn', 'sync-btn'].forEach(id => { document.getElementById(id).disabled = true; });
+      LANGS_CACHE = {};
+      return;
+    }
     const codes = Object.keys(LANGS_CACHE);
     if (!codes.length) { box.innerHTML = '<div class="muted">No languages yet.</div>'; return; }
     box.innerHTML = '<table><thead><tr><th>Code</th><th>Name</th><th>Native</th>'

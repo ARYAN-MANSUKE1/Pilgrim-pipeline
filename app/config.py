@@ -6,16 +6,21 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # --- Sarvam TTS (Bulbul v2) ---
+    # --- Sarvam TTS (Bulbul v3) ---
     sarvam_api_key: str = ""
     sarvam_tts_url: str = "https://api.sarvam.ai/text-to-speech"
-    sarvam_model: str = "bulbul:v2"
+    # v2 was retired by Sarvam (Sept 2026): every request now returns 400
+    # "Model 'bulbul:v2' has been deprecated". v3 bills 2x v2 per character.
+    sarvam_model: str = "bulbul:v3"
     # 2500 is Sarvam's ACTUAL per-request cap (verified against the API: 4000
     # returns "text: String should have at most 2500 characters"). It was set to
     # 1500, which wasted 40% of every request -- a 55k-char temple took 37 round
     # trips instead of 22. Billing is per character either way, so this is free.
     tts_max_chars: int = 2500
-    tts_speaker: str = "arya"           # v2 female: anushka, manisha, vidya, arya | male: abhilash, karun, hitesh
+    # v3 voices (none of v2's carried over), e.g. female: priya, ritu, kavya, shreya, neha,
+    # pooja, roopa, shruti | male: aditya, shubh, rahul, rohan, amit, dev. Full list: any bad
+    # name makes Sarvam's error message list them all. Samples: voice_samples/.
+    tts_speaker: str = "priya"
     tts_pitch: float = 0.0             # -0.75 .. 0.75
     tts_pace: float = 1.0              # 0.3 .. 3.0
     tts_loudness: float = 1.0          # 0.3 .. 3.0
@@ -55,6 +60,11 @@ class Settings(BaseSettings):
     # --- Google Sheet progress tracker (shared with the client) ---
     google_sa_json: str = ""   # path to a service-account JSON key; sheet shared with its email
     sheet_id: str = ""         # the spreadsheet id from its URL
+
+    # --- Dashboard login (HTTP Basic). With no password set, the dashboard only
+    # answers on this computer (localhost), so a hosted copy is never left open.
+    dashboard_user: str = "admin"
+    dashboard_password: str = ""
     sheet_limit: int = 30      # rows to keep in the sheet; 0 = every temple
 
     # --- Cost accounting (INR) ---

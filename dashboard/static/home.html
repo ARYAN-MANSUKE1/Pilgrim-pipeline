@@ -12,77 +12,141 @@
     <a href="/" class="active">Home</a>
     <a href="/process">Process Temples</a>
     <a href="/add">Add Temple</a>
+    <a href="/ads">Ads</a>
     <a href="/languages">Languages</a>
     <span class="spacer"></span>
     <span class="pill" id="total">…</span>
   </nav>
 
   <div class="wrap">
-    <h1 class="page">Overview</h1>
+    <h1 class="page">What’s left to do
+      <span class="muted" id="counted" style="font-weight:400; margin-left:10px"></span>
+      <button class="btn ghost" id="refresh" style="float:right; padding:6px 12px" onclick="refreshCount()">Refresh counts</button>
+    </h1>
 
-    <div class="cards" style="margin-bottom:22px">
-      <div class="card"><p>Temples in WordPress</p><div class="stat" id="s-total">…</div></div>
-      <div class="card"><p>Jobs completed (this session)</p><div class="stat" id="s-done">…</div></div>
-      <div class="card"><p>In queue right now</p><div class="stat" id="s-queue">…</div></div>
+    <div class="cards" style="margin-bottom:16px">
+      <div class="card"><p>Temples on the website</p><div class="stat" id="s-total">…</div></div>
+      <div class="card"><p>Fully done (all languages translated and voiced)</p><div class="stat good" id="s-complete">…</div></div>
+      <div class="card"><p>Spent today</p><div class="stat" id="s-spent">…</div><div class="muted" id="s-spent-split"></div></div>
     </div>
 
-    <div class="cards" style="margin-bottom:26px">
+    <div class="cards" style="margin-bottom:10px">
       <div class="card">
-        <h3>Process existing temples</h3>
-        <p>Browse all temples, see what's translated & voiced, and run translation / audio in batches.</p>
-        <a href="/process"><button class="btn big">Open Process Temples →</button></a>
+        <h3>Need translation</h3>
+        <div class="stat todo" id="s-text">…</div>
+        <div class="muted" id="s-text-sub"></div>
+        <div class="actions"><button class="btn" id="run-text" onclick="runBacklog('text')" disabled>Translate all</button></div>
       </div>
       <div class="card">
-        <h3>Add a new temple</h3>
-        <p>Enter a new temple's content, choose languages, and let the pipeline translate, voice and publish it.</p>
-        <a href="/add"><button class="btn big">Add New Temple →</button></a>
+        <h3>Need audio</h3>
+        <div class="stat todo" id="s-audio">…</div>
+        <div class="muted" id="s-audio-sub"></div>
+        <div class="actions"><button class="btn" id="run-audio" onclick="runBacklog('audio')" disabled>Generate all audio</button></div>
       </div>
+      <div class="card"><p>In the queue right now</p><div class="stat" id="s-queue">…</div></div>
     </div>
+    <p class="muted" id="nosource" style="margin:0 0 20px"></p>
+
+    <h1 class="page" style="font-size:18px">By language</h1>
+    <div id="langbox" style="margin-bottom:28px"><div class="muted">Counting…</div></div>
 
     <h1 class="page">Recent jobs
       <button class="btn ghost" id="stopall" style="float:right;padding:6px 12px;border-color:#b3261e;color:#b3261e" onclick="stopAll()">Stop all</button></h1>
     <div id="jobsbox"><div class="muted">No jobs yet.</div></div>
   </div>
 
+<script src="/static/status.js"></script>
 <script>
-async function load() {
-  try {
-    const s = await (await fetch('/api/stats')).json();
-    document.getElementById('total').textContent = s.total_temples.toLocaleString() + ' temples';
-    document.getElementById('s-total').innerHTML = s.total_temples.toLocaleString();
-    document.getElementById('s-done').innerHTML = s.jobs_done + '<span class="u">done</span>';
-    document.getElementById('s-queue').innerHTML = s.queue_depth + '<span class="u">queued</span>';
-  } catch(e){}
+const inr = n => '₹' + Math.round(n).toLocaleString('en-IN');
+const num = n => (n ?? 0).toLocaleString('en-IN');
+const temples = n => num(n) + `<span class="u">temple${n === 1 ? '' : 's'}</span>`;
+let stats = null;
+
+function ago(iso) {
+  const m = Math.round((Date.now() - new Date(iso)) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+}
+
+window.addEventListener('pp-stats', e => {
+  const s = stats = e.detail, b = s.backlog || {}, d = b.data, per = s.per_language_inr;
+  document.getElementById('total').textContent = num(s.total_temples) + ' temples';
+  document.getElementById('s-total').textContent = num(s.total_temples);
+  document.getElementById('s-queue').innerHTML = temples(s.queue_depth);
+  const sp = s.spent_today;
+  document.getElementById('s-spent').textContent = inr(sp.translation + sp.audio);
+  document.getElementById('s-spent-split').textContent = `translation ${inr(sp.translation)} · audio ${inr(sp.audio)}`;
+
+  document.getElementById('counted').textContent = b.counting ? 'counting… (about a minute)'
+    : b.error ? b.error : b.counted_at ? 'counted ' + ago(b.counted_at) : '';
+  document.getElementById('refresh').disabled = !!b.counting;
+  if (!d) return;
+
+  const drafts = d.total - s.total_temples;
+  document.getElementById('s-complete').innerHTML = num(d.complete) + `<span class="u">of ${num(d.total)}${drafts > 0 ? ` (incl. ${num(drafts)} draft${drafts === 1 ? '' : 's'})` : ''}</span>`;
+  document.getElementById('s-text').innerHTML = temples(d.need_text);
+  document.getElementById('s-audio').innerHTML = temples(d.need_audio);
+  const textCost = d.text_units * per.translation, audioCost = d.audio_units * per.audio;
+  document.getElementById('s-text-sub').textContent = `${num(d.text_units)} language articles missing or wrong · about ${inr(textCost)}`;
+  document.getElementById('s-audio-sub').textContent = `${num(d.audio_units)} recordings missing · about ${inr(audioCost)}`;
+  for (const [k, n, label] of [['text', d.need_text, 'Translate'], ['audio', d.need_audio, 'Generate audio for']]) {
+    const btn = document.getElementById('run-' + k);
+    btn.disabled = !n || !!b.counting;
+    btn.textContent = n ? `${label} all ${num(n)}` : 'Nothing to do';
+  }
+  document.getElementById('nosource').textContent = d.no_source
+    ? `${num(d.no_source)} temple(s) have no article to translate from — add the content in WordPress first. They are not counted above.` : '';
+
+  document.getElementById('langbox').innerHTML = '<table><thead><tr><th>Language</th><th style="text-align:right">Articles missing or wrong</th><th style="text-align:right">Recordings missing</th></tr></thead><tbody>'
+    + Object.entries(d.by_lang).map(([l, v]) =>
+        `<tr><td>${d.names[l] || l}</td><td class="num ${v.text ? '' : 'zero'}">${v.text ? num(v.text) : '✓ all done'}</td><td class="num ${v.audio ? '' : 'zero'}">${v.audio ? num(v.audio) : '✓ all done'}</td></tr>`).join('')
+    + '</tbody></table>';
+});
+
+async function refreshCount() {
+  await fetch('/api/backlog/refresh', {method: 'POST'});
+  window.ppRefreshStats();
+}
+
+async function runBacklog(kind) {
+  const d = stats.backlog.data, per = stats.per_language_inr;
+  const n = kind === 'text' ? d.need_text : d.need_audio;
+  const cost = kind === 'text' ? d.text_units * per.translation : d.audio_units * per.audio;
+  const what = kind === 'text' ? 'translate the missing languages of' : 'generate the missing audio for';
+  if (!confirm(`This will ${what} ${num(n)} temple(s).\n\nEstimated cost: about ${inr(cost)} (based on what recent temples actually cost).\n\nOnly what is missing is done — languages that are already correct are not touched. If the credit runs out, the queue pauses by itself and nothing is lost.\n\nContinue?`)) return;
+  const r = await (await fetch('/api/run_backlog', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind})})).json();
+  if (r.error) { alert(r.error); return; }
+  alert(`Queued ${num(r.queued)} temple(s).` + (r.skipped_already_queued ? `\n${num(r.skipped_already_queued)} were already in the queue.` : '') + '\n\nFollow progress under Recent jobs.');
+  window.ppRefreshStats(); loadJobs();
+}
+
+async function loadJobs() {
   const data = await (await fetch('/api/jobs')).json();
   const jobs = data.jobs.slice(0, 12);
-  const active = data.jobs.filter(j => j.status==='queued'||j.status==='running').length;
+  const active = data.jobs.filter(j => j.status === 'queued' || j.status === 'running').length;
   document.getElementById('stopall').style.display = active ? '' : 'none';
-  if (!jobs.length) { document.getElementById('jobsbox').innerHTML = '<div class="muted">No jobs yet — run something from Process or Add.</div>'; return; }
+  if (!jobs.length) { document.getElementById('jobsbox').innerHTML = '<div class="muted">No jobs yet — use the buttons above, or Process Temples / Add Temple.</div>'; return; }
   document.getElementById('jobsbox').innerHTML = '<table><thead><tr><th style="width:50px">Job</th><th>Temple</th><th>Op</th><th>Status</th><th>Latest</th><th style="width:62px"></th></tr></thead><tbody>'
     + jobs.map(j => {
-        const canStop = j.status==='queued' || j.status==='running';
+        const canStop = j.status === 'queued' || j.status === 'running';
         const btn = canStop
           ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;border-color:#b3261e;color:#b3261e" onclick="stopJob(${j.id})">Stop</button>`
           : '';
-        return `<tr><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td><td>${btn}</td></tr>`;
+        return `<tr><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.error || j.last || ''}</td><td>${btn}</td></tr>`;
       }).join('')
     + '</tbody></table>';
 }
-async function stopJob(id){
-  const r = await (await fetch(`/api/jobs/${id}/cancel`,{method:'POST'})).json();
+async function stopJob(id) {
+  const r = await (await fetch(`/api/jobs/${id}/cancel`, {method: 'POST'})).json();
   if (r.result === 'stopping') alert(`Job #${id} is running — it will stop after the current step. Work already done is saved.`);
-  load();
+  loadJobs();
 }
-async function stopAll(){
-  if(!confirm('Stop all queued and running jobs?
-
-Anything already translated stays saved — re-queueing later only does what is missing.')) return;
-  const r = await (await fetch('/api/jobs/cancel-all',{method:'POST'})).json();
-  alert(`Stopped ${r.cancelled} queued job(s).` + (r.stopping ? `
-${r.stopping} running job(s) will stop after the current step.` : ''));
-  load();
+async function stopAll() {
+  if (!confirm('Stop all queued and running jobs?\n\nAnything already translated stays saved — re-queueing later only does what is missing.')) return;
+  const r = await (await fetch('/api/jobs/cancel-all', {method: 'POST'})).json();
+  alert(`Stopped ${r.cancelled} queued job(s).` + (r.stopping ? `\n${r.stopping} running job(s) will stop after the current step.` : ''));
+  loadJobs();
 }
-load(); setInterval(load, 3000);
+loadJobs(); setInterval(loadJobs, 3000);
 </script>
 </body>
 </html>

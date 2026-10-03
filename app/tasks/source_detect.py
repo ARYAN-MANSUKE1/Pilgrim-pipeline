@@ -34,8 +34,6 @@ _WS_RE = re.compile(r"\s+")
 DEFAULT_SOURCE_CANDIDATES: Sequence[str] = ("mr", "en", "hi")
 # When several fields are populated, prefer the source in this order (team decision).
 DEFAULT_SOURCE_PRIORITY: Sequence[str] = ("mr", "en", "hi")
-# All languages the site publishes (source + generated).
-DEFAULT_ALL_LANGS: Sequence[str] = ("mr", "en", "hi", "gu", "ta", "te", "ml", "kn")
 # A real temple body is thousands of chars; placeholders/titles are short.
 DEFAULT_MIN_CHARS = 200
 
@@ -85,17 +83,3 @@ def detect_source_language(
         qualified=qualified,
         ambiguous=len(qualified) > 1,
     )
-
-
-def targets_to_fill(
-    fields: Dict[str, Optional[str]],
-    source: str,
-    all_langs: Sequence[str] = DEFAULT_ALL_LANGS,
-    min_chars: int = DEFAULT_MIN_CHARS,
-) -> List[str]:
-    """Languages that still need generating: everything except the source whose
-    field is empty/placeholder (below min_chars). Already-good fields are left alone."""
-    return [
-        lang for lang in all_langs
-        if lang != source and visible_text_length(fields.get(lang)) < min_chars
-    ]

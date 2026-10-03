@@ -7,7 +7,6 @@ Run:  python test_source_detect.py
 
 from app.tasks.source_detect import (
     detect_source_language,
-    targets_to_fill,
     visible_text_length,
 )
 
@@ -44,12 +43,6 @@ check("default priority mr>en>hi picks mr", r.source == "mr")
 # 5) Priority breaks ties deterministically when ambiguous.
 r = detect_source_language({"mr": BODY_MR, "en": BODY_EN, "hi": ""}, priority=("en", "mr", "hi"))
 check("priority picks en over mr", r.source == "en")
-
-# 6) targets_to_fill: fill only the empty/placeholder non-source langs.
-fields = {"mr": BODY_MR, "en": "", "hi": PLACEHOLDER, "gu": "", "ta": IMG_ONLY, "te": ""}
-targets = targets_to_fill(fields, source="mr")
-check("targets are the empty/placeholder langs", set(targets) == {"en", "hi", "gu", "ta", "te"})
-check("source is never a target", "mr" not in targets)
 
 
 print("--- checks ---")

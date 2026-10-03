@@ -28,10 +28,9 @@ from app.tasks import wp_client as wp
 from app.tasks.gemini_translate import translate as gtranslate
 from app.tasks.source_detect import detect_source_language
 from app.tasks import costs
-from app.tasks.structured_translate import strip_cosmetic_spans, strip_tags, translate_html
-
-# Gemini's request cap is far above Sarvam's; send the whole body in 1-2 calls.
-_GEMINI_MAX_CHARS = 6000
+from app.tasks.field_checks import script_frac
+from app.tasks.safe_translate import translate_article, translate_title
+from app.tasks.structured_translate import strip_cosmetic_spans, strip_tags
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("run_temple")
@@ -76,6 +75,10 @@ def run(post_id: int, forced_source: str | None = None, targets: list[str] | Non
         return
 
     src_title = strip_tags(titles.get(source) or post.get("title", {}).get("rendered", ""))
+    # Titles come from the English title where there is one (see safe_translate).
+    wp_title = strip_tags(post.get("title", {}).get("raw") or post.get("title", {}).get("rendered", ""))
+    en_title = next((t for t in (strip_tags(titles.get("en") or ""), wp_title) if t and script_frac(t, "en") >= 0.85), "")
+    title_candidates = [("en", en_title), (source, src_title)]
     tgts = targets or [l for l in wp.CONTENT_FIELD_KEYS if l != source]
     log.info("Temple %s (slug=%s): source=%s (%d chars) -> targets=%s",
              post_id, slug, source, len(content[source]), ",".join(tgts))
@@ -85,8 +88,12 @@ def run(post_id: int, forced_source: str | None = None, targets: list[str] | Non
             continue
         try:
             log.info("[%s] translating title + content (Gemini)...", tgt)
-            title = gtranslate(src_title, source, tgt) if src_title.strip() else ""
-            html = translate_html(content[source], source, tgt, gtranslate, max_chars=_GEMINI_MAX_CHARS)
+            # Validated: raises BadTranslation (nothing saved, no audio bought) if Gemini
+            # keeps returning the source text instead of a translation.
+            html = translate_article(content[source], source, tgt, gtranslate)
+            title = (en_title if tgt == "en" else translate_title(title_candidates, tgt, gtranslate)) or ""
+            if not title:
+                log.warning("[%s] title could not be translated safely - left as it was", tgt)
             wp.write_title_and_content(post_id, tgt, title, html)
             log.info("[%s] wrote %d chars; generating + uploading audio (Sarvam)...", tgt, len(html))
             wp.generate_and_save(strip_tags(html), tgt, post_id, slug)

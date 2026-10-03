@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ad campaigns · Pilgrim Pipeline</title>
+<link rel="stylesheet" href="/static/style.css">
+<style>
+  .thumb { width:64px; height:48px; object-fit:cover; border-radius:6px; border:1px solid var(--line); background:#f3f0ec; }
+  .status.running { background:#e9f8ec; color:#1c7a34; }
+  .status.scheduled { background:#e8f0fd; color:#1f4fa8; }
+  .status.ended, .status.not-running { background:#f1f1f1; color:#888; }
+  .status.paused { background:#fff0d6; color:#b56b00; }
+  .state-group { border:1px solid var(--line); border-radius:8px; padding:8px 10px; margin-bottom:8px; background:#fff; }
+  .state-group summary { cursor:pointer; font-weight:600; }
+  .districts { display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:8px; }
+  .districts label { font-size:13px; display:flex; gap:4px; align-items:center; }
+  td .btn { padding:4px 9px; font-size:12px; }
+  #form { display:none; margin-bottom:24px; }
+</style>
+</head>
+<body>
+  <nav class="nav">
+    <span class="brand">🛕 Pilgrim Pipeline</span>
+    <a href="/">Home</a>
+    <a href="/process">Process Temples</a>
+    <a href="/add">Add Temple</a>
+    <a href="/ads" class="active">Ads</a>
+    <a href="/languages">Languages</a>
+  </nav>
+
+  <div class="wrap">
+    <h1 class="page">Ad campaigns
+      <button class="btn" style="float:right" onclick="openForm()">+ New campaign</button></h1>
+    <p class="muted" style="margin-top:-8px">Ads appear on temple pages in the chosen states / districts, only between the start and end dates, and only while Active.
+      Changes reach the website within about 20 minutes — or straight away after <b>clearing the 10Web cache</b>.</p>
+
+    <div class="cards" style="margin:16px 0 22px">
+      <div class="card"><p>Running right now</p><div class="stat" id="s-running">…</div></div>
+      <div class="card"><p>Impressions (all campaigns)</p><div class="stat" id="s-imp">…</div></div>
+      <div class="card"><p>Clicks (all campaigns)</p><div class="stat" id="s-clk">…</div></div>
+    </div>
+
+    <div class="card" id="form">
+      <h3 id="formtitle">New campaign</h3>
+      <div class="row">
+        <label class="field"><span>Advertiser name</span><input type="text" id="f-name" placeholder="e.g. Shree Travels"></label>
+        <label class="field"><span>Where on the temple page</span>
+          <select id="f-placement" onchange="sizeHint()">
+            <option value="temple_right">Right column (beside the article)</option>
+            <option value="temple_left">Left column (beside the article)</option>
+            <option value="temple_top">Top banner (above the article)</option>
+            <option value="temple_bottom">Bottom banner (below the article)</option>
+          </select>
+          <div class="hint">Side columns are hidden on phones; the top and bottom banners show everywhere.</div>
+        </label>
+      </div>
+
+      <div class="field" style="margin-bottom:16px">
+        <span style="display:block; font-size:13px; font-weight:600; margin-bottom:6px">Ad image</span>
+        <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap">
+          <img id="f-preview" class="thumb" style="width:120px; height:90px; object-fit:contain" alt="">
+          <input type="file" id="f-image" accept="image/jpeg,image/png,image/webp,image/gif" onchange="pickImage(this.files[0])">
+        </div>
+        <div class="hint" id="f-sizehint"></div>
+      </div>
+
+      <label class="field"><span>Link (where a click goes — optional)</span><input type="text" id="f-link" placeholder="https://…"></label>
+
+      <div class="row">
+        <label class="field"><span>Start date</span><input type="text" id="f-start" placeholder="YYYY-MM-DD" onfocus="this.type='date'"></label>
+        <label class="field"><span>End date</span><input type="text" id="f-end" placeholder="YYYY-MM-DD" onfocus="this.type='date'"></label>
+        <label class="field"><span>Status</span>
+          <select id="f-status"><option value="active">Active</option><option value="paused">Paused</option><option value="draft">Draft</option></select></label>
+        <label class="field"><span>Price (₹, for your records)</span><input type="text" id="f-price" inputmode="decimal" placeholder="0"></label>
+      </div>
+
+      <div class="field" style="margin-bottom:16px">
+        <span style="display:block; font-size:13px; font-weight:600; margin-bottom:6px">Show on temples in</span>
+        <div id="f-cities"><div class="muted">Loading states and districts…</div></div>
+        <div class="hint">Tick a whole state, or open it and pick districts.</div>
+      </div>
+
+      <div style="display:flex; gap:10px; align-items:center">
+        <button class="btn" id="f-save" onclick="save()">Save campaign</button>
+        <button class="btn ghost" onclick="closeForm()">Cancel</button>
+        <span id="f-msg" class="muted"></span>
+      </div>
+    </div>
+
+    <div id="adsbox"><div class="loading">Loading campaigns…</div></div>
+  </div>
+
+<script src="/static/status.js"></script>
+<script>
+let ADS = [], PLACEMENTS = {}, STATES = [], CITY_NAME = {}, editing = null, imageId = 0, imageFile = null;
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const SIZE_HINT = {
+  temple_right: 'Tall image for the side column, e.g. 300 × 600 px (shown about 160 px wide).',
+  temple_left: 'Tall image for the side column, e.g. 300 × 600 px (shown about 160 px wide).',
+  temple_top: 'Wide banner, e.g. 1200 × 200 px (shown across the full width).',
+  temple_bottom: 'Wide banner, e.g. 1200 × 200 px (shown across the article width, below the article).',
+};
+function sizeHint() { document.getElementById('f-sizehint').textContent = SIZE_HINT[document.getElementById('f-placement').value]; }
+
+async function loadCities() {
+  STATES = await (await fetch('/api/cities')).json();
+  STATES.forEach(s => { CITY_NAME[s.id] = s.name; s.districts.forEach(d => CITY_NAME[d.id] = d.name); });
+  document.getElementById('f-cities').innerHTML = STATES.map(s => `
+    <details class="state-group">
+      <summary><label onclick="event.stopPropagation()"><input type="checkbox" class="city state" value="${s.id}" onchange="stateToggled(this)"> ${esc(s.name)} — whole state</label>
+        <span class="muted">${s.districts.length} districts</span></summary>
+      <div class="districts">${s.districts.map(d => `<label><input type="checkbox" class="city" data-state="${s.id}" value="${d.id}">${esc(d.name)}</label>`).join('')}</div>
+    </details>`).join('');
+}
+// "Whole state" already covers every district, so its districts are shown ticked and locked.
+function stateToggled(cb) {
+  document.querySelectorAll(`.city[data-state="${cb.value}"]`).forEach(d => { d.checked = cb.checked; d.disabled = cb.checked; });
+}
+
+async function load() {
+  const r = await (await fetch('/api/ads')).json();
+  if (r.error) { ['s-running', 's-imp', 's-clk'].forEach(id => document.getElementById(id).textContent = '—'); document.getElementById('adsbox').innerHTML = `<div class="card" style="color:#8a1c12">${esc(r.error)}</div>`; return; }
+  ADS = r.ads; PLACEMENTS = r.placements;
+  document.getElementById('s-running').textContent = ADS.filter(a => a.state === 'running').length;
+  document.getElementById('s-imp').textContent = ADS.reduce((n, a) => n + a.impressions, 0).toLocaleString('en-IN');
+  document.getElementById('s-clk').textContent = ADS.reduce((n, a) => n + a.clicks, 0).toLocaleString('en-IN');
+  if (!ADS.length) { document.getElementById('adsbox').innerHTML = '<div class="loading">No campaigns yet — press “+ New campaign”.</div>'; return; }
+  document.getElementById('adsbox').innerHTML = '<table><thead><tr><th></th><th>Advertiser</th><th>Where</th><th>Shown in</th><th>Dates</th><th>Status</th><th style="text-align:right">Impressions</th><th style="text-align:right">Clicks</th><th style="text-align:right">Price</th><th></th></tr></thead><tbody>'
+    + ADS.map(a => {
+        const cities = (a.target_cities || []).map(c => CITY_NAME[c] || ('#' + c));
+        const ctr = a.impressions ? ` <span class="muted">(${(100 * a.clicks / a.impressions).toFixed(1)}%)</span>` : '';
+        const toggle = a.campaign_status === 'active'
+          ? `<button class="btn ghost" onclick="setStatus(${a.id},'paused')">Pause</button>`
+          : `<button class="btn ghost" onclick="setStatus(${a.id},'active')">Activate</button>`;
+        return `<tr>
+          <td>${a.image_url ? `<img class="thumb" src="${esc(a.image_url)}" alt="">` : '<div class="thumb"></div>'}</td>
+          <td><b>${esc(a.advertiser_name)}</b>${a.destination_url ? `<div class="muted"><a href="${esc(a.destination_url)}" target="_blank" rel="noopener">${esc(a.destination_url.replace(/^https?:\/\//, '').slice(0, 40))}</a></div>` : ''}</td>
+          <td>${esc(PLACEMENTS[a.placement] || a.placement || '—')}</td>
+          <td class="muted" title="${esc(cities.join(', '))}">${esc(cities.slice(0, 3).join(', '))}${cities.length > 3 ? ` +${cities.length - 3} more` : ''}</td>
+          <td class="muted">${a.start_date || '—'} → ${a.end_date || '—'}</td>
+          <td><span class="status ${a.state.replace(' ', '-')}">${a.state}</span></td>
+          <td class="num">${a.impressions.toLocaleString('en-IN')}</td>
+          <td class="num">${a.clicks.toLocaleString('en-IN')}${ctr}</td>
+          <td class="num">${a.campaign_price ? '₹' + Number(a.campaign_price).toLocaleString('en-IN') : '—'}</td>
+          <td style="white-space:nowrap">${toggle} <button class="btn ghost" onclick="openForm(${a.id})">Edit</button> <button class="btn ghost" style="color:#b3261e" onclick="del(${a.id})">Delete</button></td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+}
+
+function openForm(id) {
+  editing = id ? ADS.find(a => a.id === id) : null;
+  const a = editing || {placement: 'temple_right', campaign_status: 'active', target_cities: []};
+  document.getElementById('formtitle').textContent = editing ? `Edit campaign — ${editing.advertiser_name}` : 'New campaign';
+  document.getElementById('f-name').value = a.advertiser_name || '';
+  document.getElementById('f-placement').value = a.placement || 'temple_right';
+  document.getElementById('f-link').value = a.destination_url || '';
+  for (const k of ['start', 'end']) { const el = document.getElementById('f-' + k); el.type = 'date'; el.value = a[k + '_date'] || ''; }
+  document.getElementById('f-status').value = ['active', 'paused', 'draft'].includes(a.campaign_status) ? a.campaign_status : 'active';
+  document.getElementById('f-price').value = a.campaign_price || '';
+  imageId = Number(a.ad_creative) || 0; imageFile = null;
+  document.getElementById('f-preview').src = a.image_url || '';
+  document.getElementById('f-image').value = '';
+  const chosen = new Set((a.target_cities || []).map(String));
+  document.querySelectorAll('.city').forEach(c => { c.disabled = false; c.checked = chosen.has(c.value); });
+  document.querySelectorAll('.city.state:checked').forEach(stateToggled);
+  sizeHint(); msg('');
+  document.getElementById('form').style.display = 'block';
+  document.getElementById('form').scrollIntoView({behavior: 'smooth'});
+}
+function closeForm() { document.getElementById('form').style.display = 'none'; editing = null; }
+function pickImage(f) {
+  if (!f) return;
+  if (f.size > 15 * 1024 * 1024) { alert('That image is over 15 MB — please use a smaller copy.'); return; }
+  imageFile = f; document.getElementById('f-preview').src = URL.createObjectURL(f);
+}
+function msg(t, err) { const m = document.getElementById('f-msg'); m.textContent = t; m.style.color = err ? '#c0392b' : ''; }
+
+async function save() {
+  const btn = document.getElementById('f-save'); btn.disabled = true;
+  try {
+    if (imageFile) {
+      msg('Uploading image…');
+      const u = await (await fetch('/api/upload_image?name=' + encodeURIComponent(imageFile.name), {method: 'POST', headers: {'Content-Type': imageFile.type}, body: imageFile})).json();
+      if (u.error) throw new Error(u.error);
+      imageId = u.id; imageFile = null;
+    }
+    // A ticked state covers its districts, so only the state is saved for it.
+    const cities = [...document.querySelectorAll('.city:checked:not(:disabled)')].map(c => Number(c.value));
+    const body = {
+      advertiser_name: document.getElementById('f-name').value.trim(),
+      ad_creative: imageId,
+      destination_url: document.getElementById('f-link').value.trim(),
+      start_date: document.getElementById('f-start').value, end_date: document.getElementById('f-end').value,
+      target_cities: cities,
+      placement: document.getElementById('f-placement').value,
+      campaign_status: document.getElementById('f-status').value,
+      campaign_price: parseFloat(document.getElementById('f-price').value) || 0,
+    };
+    msg('Saving…');
+    const r = await (await fetch('/api/ads' + (editing ? '/' + editing.id : ''), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})).json();
+    if (r.error) throw new Error(r.error);
+    closeForm(); await load();
+    alert('Saved. It reaches the website within about 20 minutes — clear the 10Web cache to see it straight away.');
+  } catch (e) { msg(e.message, true); }
+  btn.disabled = false;
+}
+async function setStatus(id, s) {
+  const r = await (await fetch(`/api/ads/${id}/status`, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({campaign_status: s})})).json();
+  if (r.error) alert(r.error); load();
+}
+async function del(id) {
+  const a = ADS.find(x => x.id === id);
+  if (!confirm(`Delete the campaign "${a.advertiser_name}"?\n\nIt stops showing and moves to the WordPress trash (restorable there for 30 days).`)) return;
+  const r = await (await fetch('/api/ads/' + id, {method: 'DELETE'})).json();
+  if (r.error) alert(r.error); load();
+}
+loadCities().then(load);
+</script>
+</body>
+</html>

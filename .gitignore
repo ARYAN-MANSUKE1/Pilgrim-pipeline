@@ -68,3 +68,8 @@ latin_leaks_split.json
 not_queued_gaps.json
 remaining_gaps.json
 check_24230_te.txt
+
+# dashboard "what is left" count cache (dashboard/main.py)
+dashboard/backlog.json
+voice_samples/
+gen-lang-client-0853258613-7be56cee647f.json

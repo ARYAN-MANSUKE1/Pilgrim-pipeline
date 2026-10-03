@@ -72,3 +72,30 @@ td.temple a { color:var(--maroon); text-decoration:none; font-weight:600; }
 .status.failed { background:#fde8e8; color:#c0392b; }
 .logbox { background:#1e1e1e; color:#d6d6d6; font-family:ui-monospace,monospace; font-size:12px; padding:10px 12px; border-radius:8px; max-height:220px; overflow:auto; white-space:pre-wrap; margin-top:8px; }
 h1.page { font-size:22px; margin:4px 0 18px; }
+.status.cancelled { background:#f1f1f1; color:#888; }
+
+/* status banner (status.js) */
+#ppbanner { display:none; padding:12px 22px; font-size:14px; line-height:1.6; }
+#ppbanner.show { display:block; }
+#ppbanner.danger { background:#fde8e8; color:#8a1c12; border-bottom:2px solid #c0392b; }
+#ppbanner.warn { background:#fff4d6; color:#7a5200; border-bottom:2px solid #e0a800; }
+#ppbanner a { color:inherit; font-weight:700; }
+#ppbanner .btn { margin-left:8px; padding:6px 12px; }
+
+/* home: what's left */
+.stat.good { color:#1c7a34; }
+.stat.todo { color:var(--maroon); }
+.card .actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+td.num { text-align:right; font-variant-numeric:tabular-nums; }
+td.num.zero { color:#1c7a34; }
+
+/* phones: the menu scrolls sideways instead of running off the screen */
+@media (max-width: 700px) {
+  .nav { overflow-x: auto; gap: 2px; padding: 0 10px; }
+  .nav .brand { margin-right: 8px; white-space: nowrap; }
+  .nav a { padding: 8px 9px; white-space: nowrap; }
+  .nav .pill { display: none; }
+  .wrap { padding: 14px; }
+  h1.page .btn { float: none !important; display: block; margin: 10px 0 0; }
+  table { display: block; overflow-x: auto; }
+}

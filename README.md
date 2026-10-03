@@ -3,19 +3,25 @@
 One language in, all languages out. Give a temple's description in a single Indian
 language and the pipeline fills in every other language, generates a voice recording
 for each, and writes it all back into WordPress. Built for the Pilgrim Data temple
-platform (~1,370 temples).
+platform (~2,360 temples on pilgrimdata.in).
 
 ## Features
 
-- **Structure-preserving translation** (Google Gemini 2.5 Flash) - images and
-  paragraphs survive intact.
-- **Text-to-speech** in every language (Sarvam Bulbul v2 or v3).
-- **WordPress write-back** - content, titles, and audio into a `temple` custom post
-  type via the REST API.
-- **Admin dashboard** (FastAPI) with a background job queue that survives restarts.
+- **Structure-preserving translation** (Google Gemini; model set by `GEMINI_MODEL`,
+  production uses `gemini-3.1-flash-lite`) - images and paragraphs survive intact.
+- **Checked before it is saved** - every translation is validated (right script,
+  not the source handed back, not cut short, no runaway repetition, no leaked
+  markers) and retried sentence by sentence; anything still wrong is never saved.
+- **Text-to-speech** in every language (Sarvam Bulbul v3; v2 was retired by Sarvam).
+- **WordPress write-back** - content, titles, audio and photos into the `temple`
+  post type via the REST API.
+- **Admin dashboard** (FastAPI, login-protected) with a background job queue that
+  survives restarts, pauses itself when a provider runs out of credit, and shows
+  what is left to do, what it will cost and what was spent today.
+- **Ad campaigns** - create, edit, pause and track the site's temple-page ads.
 
-**Languages:** Marathi, English, Hindi, Gujarati, Tamil, Telugu, Malayalam, Kannada
-(`mr en hi gj ta te ml kn`). Bengali and Punjabi are supported experimentally.
+**Languages:** Marathi, English, Hindi, Gujarati, Tamil, Telugu, Malayalam, Kannada,
+Bengali, Punjabi (`mr en hi gj ta te ml kn bn pa`).
 
 ## Repository layout
 
@@ -36,10 +42,15 @@ dashboard/
   main.py                      Routes + WordPress connection
   pipeline.py                  Per-temple processing (translate / audio / both)
   jobs.py                      Background job queue with crash-resume
-  static/                      home / process / add pages (plain HTML + JS)
+  sheet_sync.py                Push progress to the team's Google Sheet
+  static/                      home / process / add / ads / languages pages (plain HTML + JS)
 
-test_source_detect.py          Check for source_detect
-test_structured_translate.py   Check for the HTML splitter
+app/tasks/safe_translate.py    Validate-then-save translation (see "Checked before it is saved")
+app/tasks/field_checks.py      Is a field really in the language it claims to be?
+translate_live.py              One-off runner for the live-only temples
+new theme/                     Master copies of the live WordPress theme files
+
+test_*.py, test_ads.php        Checks (see "Run the checks")
 .env.example                   Copy to .env and fill in
 ```
 
@@ -67,6 +78,10 @@ See `.gitignore`.
 | `WP_URL`, `WP_USER`, `WP_APP_PASSWORD` | WordPress site + Application Password (write-back) |
 | `GEMINI_API_KEY` | Gemini via AI Studio - the simplest option, **or** |
 | `GEMINI_USE_ADC=1` + `GCP_PROJECT` | Gemini via Vertex AI with Application Default Credentials |
+| `DASHBOARD_USER`, `DASHBOARD_PASSWORD` | Dashboard login. **Required** if the dashboard is reachable from other computers; with no password it only answers on the server itself |
+| `LIVE_WP_URL`, `LIVE_WP_USER`, `LIVE_WP_APP_PASSWORD` | The live site, for the "live" columns in the CSV export and sheet |
+| `GOOGLE_SA_JSON`, `SHEET_ID` | Optional: service-account key file + sheet id for the Google Sheet sync |
+| `TTS_SPEAKER` | Sarvam v3 voice (default `priya`; samples in `voice_samples/`) |
 
 Notes:
 
@@ -96,20 +111,39 @@ Open the temple on the staging site to see the result.
 uvicorn dashboard.main:app --reload --port 8000
 ```
 
-Open http://localhost:8000. Three pages:
+Open http://localhost:8000 (on a server: set `DASHBOARD_PASSWORD` first and serve it
+over HTTPS). Pages:
 
-- **Home** - connection status and totals.
+- **Home** - what is left to translate / voice per language, estimated cost,
+  spent today, one-click "Translate all" / "Generate audio for all", recent jobs.
 - **Process Temples** - search, select temples, choose translate and/or audio per
-  language, and run. Jobs run in the background and survive a restart.
-- **Add Temple** - paste source content, choose languages, and create the temple in
-  WordPress as a **Draft** (you publish it there yourself).
+  language, and run; Export CSV (with the live site's languages and links).
+- **Add Temple** - paste source content, add photos (first = cover), choose languages,
+  and create the temple in WordPress as a **Draft** (you publish it there yourself).
+- **Ads** - ad campaigns: image, link, placement (top / left / right / bottom),
+  dates, target states and districts, pause / edit / delete, impressions and clicks.
+  Needs the theme's `functions.php` from `new theme/`.
+- **Languages** - only works with a theme that has the language registry
+  (`pilgrim/v1/languages`); the current theme has its 10 languages built in.
+
+If Gemini or Sarvam runs out of credit, a red banner names the provider, the queue
+pauses with nothing lost, and **Resume** continues after a top-up.
 
 ### Run the checks
 
 ```bash
-python test_source_detect.py
-python test_structured_translate.py
+python test_source_detect.py        # source-language choice
+python test_structured_translate.py # HTML structure survives translation
+python test_safe_translate.py       # validation + retry, full pipeline flow
+python test_edge_cases.py           # 13 failure modes through the real pipeline
+python test_credit_pause.py         # queue pauses on out-of-credit, resumes
+python -m app.tasks.field_checks
+python -m app.tasks.costs
+python -m dashboard.sheet_sync
+php test_ads.php                    # ad matching in the theme
 ```
+
+None of these call a paid API or write to WordPress.
 
 ## How it works
 
@@ -120,7 +154,7 @@ python test_structured_translate.py
    translating, collapsing hundreds of tiny API calls into one call per language.
 3. **Correct pronunciation.** `tts_normalize` expands Marathi/Hindi abbreviations
    (for example "ta." -> "taluka", "ji." -> "jilha") before speech.
-4. **Long text.** Sarvam caps each request at 1,500 characters, so audio is chunked
+4. **Long text.** Sarvam caps each request at 2,500 characters, so audio is chunked
    on sentence boundaries and stitched back into one file using the stdlib `wave`
    module.
 5. **Resilience.** WordPress writes and TTS calls retry on transport errors, and the

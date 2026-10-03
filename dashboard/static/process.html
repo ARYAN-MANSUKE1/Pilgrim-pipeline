@@ -13,6 +13,7 @@
     <a href="/">Home</a>
     <a href="/process" class="active">Process Temples</a>
     <a href="/add">Add Temple</a>
+    <a href="/ads">Ads</a>
     <a href="/languages">Languages</a>
     <span class="spacer"></span>
     <span class="pill" id="count2">…</span>
@@ -23,7 +24,7 @@
       <input id="search" type="search" placeholder="Search temple by name…" style="min-width:320px" onkeydown="if(event.key==='Enter')load(1)">
       <button class="btn" onclick="load(1)">Search Temple</button>
       <button class="btn ghost" onclick="document.getElementById('search').value='';load(1)">Clear</button>
-      <a class="btn ghost" href="/api/export.csv" download title="All temples: languages, audio and cost">Export CSV</a>
+      <a class="btn ghost" href="/api/export.csv" download title="All temples: languages, audio, cost, and what the live site has. Takes 2-3 minutes.">Export CSV</a>
       <span class="count" id="count"></span>
     </div>
     <div id="tablebox"><div class="loading">Loading temples from WordPress…</div></div>
@@ -69,6 +70,7 @@
     </div>
   </div>
 
+<script src="/static/status.js"></script>
 <script>
 // Populated from /api/temples' "langs" field (server-driven from the language
 // registry), not hardcoded -- so a language added/removed via the dashboard
@@ -120,7 +122,7 @@ function renderTable(data) {
   const rows = data.temples.map(t => {
     const langs = LANGS.map(l => chip(l, t.content[l]??0, data.min_chars, !!t.audio[l], t.source===l)).join('');
     const checked = state.selected.has(t.id) ? 'checked' : '';
-    return `<tr><td><input type="checkbox" class="rowchk" data-id="${t.id}" ${checked} onchange="toggleRow(${t.id}, this.checked)"></td><td>${t.id}</td><td class="temple"><a href="${t.link}" target="_blank">${t.title}</a><div class="muted">source: <b>${t.source??'—'}</b></div></td><td><div class="langs">${langs}</div></td></tr>`;
+    return `<tr><td><input type="checkbox" class="rowchk" data-id="${t.id}" ${checked} onchange="toggleRow(${t.id}, this.checked)"></td><td>${t.id}</td><td class="temple"><a href="${t.link}" target="_blank">${t.title}</a>${t.status && t.status !== 'publish' ? ` <span class="status queued">${t.status}</span>` : ''}<div class="muted">source: <b>${t.source??'—'}</b></div></td><td><div class="langs">${langs}</div></td></tr>`;
   }).join('');
   document.getElementById('tablebox').innerHTML = `<table><thead><tr><th style="width:34px"><input type="checkbox" onchange="toggleAll(this.checked)"></th><th style="width:64px">ID</th><th>Temple</th><th>Languages (✓ text · ♪ audio)</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
@@ -169,7 +171,7 @@ async function pollJobs() {
         const btn = canStop
           ? `<button class="btn ghost" style="padding:2px 9px;font-size:12px;border-color:#b3261e;color:#b3261e" onclick="event.stopPropagation();stopJob(${j.id})">Stop</button>`
           : '';
-        return `<tr onclick="viewLog(${j.id})" style="cursor:pointer"><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.last||''}</td><td>${btn}</td></tr>`;
+        return `<tr onclick="viewLog(${j.id})" style="cursor:pointer"><td>#${j.id}</td><td>${j.temple_title}</td><td>${j.operation}</td><td><span class="status ${j.status}">${j.status}</span></td><td class="muted">${j.error||j.last||''}</td><td>${btn}</td></tr>`;
       }).join('')
     + '</tbody></table>';
   if (openLogId !== null) renderLog(openLogId);

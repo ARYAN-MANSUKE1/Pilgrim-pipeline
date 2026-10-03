@@ -12,6 +12,7 @@
     <a href="/">Home</a>
     <a href="/process">Process Temples</a>
     <a href="/add" class="active">Add Temple</a>
+    <a href="/ads">Ads</a>
     <a href="/languages">Languages</a>
   </nav>
 
@@ -43,6 +44,13 @@
         <div class="hint">Per-word &lt;span&gt; wrappers get cleaned automatically; images & paragraph structure are kept.</div>
       </label>
 
+      <div class="field" style="margin-bottom:16px">
+        <span style="display:block; font-size:13px; font-weight:600; margin-bottom:6px">Photos</span>
+        <input type="file" id="photos" accept="image/jpeg,image/png,image/webp" multiple onchange="addPhotos(this.files); this.value=''">
+        <div id="photobox" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:10px"></div>
+        <div class="hint">The <b>first photo is the cover image</b>; all of them go into the temple’s photo slider. Click ★ to make a photo the cover, × to remove it. JPG, PNG or WebP, up to 15 MB each.</div>
+      </div>
+
       <label class="field"><span>Languages — choose Translate and/or Audio for each</span>
         <table style="max-width:460px">
           <thead><tr><th>Language</th><th style="text-align:center;width:90px">Translate</th><th style="text-align:center;width:70px">Audio</th></tr></thead>
@@ -66,9 +74,10 @@
 
     <div id="result" style="margin-top:18px"></div>
 
-    <p class="hint" style="margin-top:20px">Coming next: photo/gallery upload and State / City / Category selection. For now, add those in WordPress after the temple is created.</p>
+    <p class="hint" style="margin-top:20px">State / City / Category are not set here yet — add them in WordPress after the temple is created (City also decides which ads show on it).</p>
   </div>
 
+<script src="/static/status.js"></script>
 <script>
 // Populated from /api/all_langs (server-driven), not hardcoded -- so a
 // language added/removed via the dashboard shows up here automatically.
@@ -84,6 +93,37 @@ function buildMatrix() {
       <td style="text-align:center">${trCell}</td>
       <td style="text-align:center"><input type="checkbox" class="au" data-l="${l}"></td></tr>`;
   }).join('');
+}
+// Photos picked but not uploaded yet: uploaded on "Create", so nothing lands in
+// WordPress for a temple that is never created.
+let PHOTOS = [];
+function addPhotos(files) {
+  for (const f of files) {
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { alert(f.name + ' is not a JPG, PNG or WebP photo.'); continue; }
+    if (f.size > 15 * 1024 * 1024) { alert(f.name + ' is over 15 MB — please use a smaller copy.'); continue; }
+    PHOTOS.push({file: f, url: URL.createObjectURL(f)});
+  }
+  drawPhotos();
+}
+function drawPhotos() {
+  document.getElementById('photobox').innerHTML = PHOTOS.map((p, i) => `
+    <div style="position:relative; width:110px">
+      <img src="${p.url}" alt="" style="width:110px; height:80px; object-fit:cover; border-radius:8px; border:${i ? '1px solid var(--line)' : '3px solid var(--orange)'}">
+      <div class="muted" style="text-align:center">${i ? '' : 'Cover'}</div>
+      <button type="button" title="Remove" onclick="PHOTOS.splice(${i},1); drawPhotos()" style="position:absolute; top:3px; right:3px; border:none; border-radius:50%; width:22px; height:22px; cursor:pointer; background:#000a; color:#fff">×</button>
+      ${i ? `<button type="button" title="Make this the cover" onclick="PHOTOS.unshift(PHOTOS.splice(${i},1)[0]); drawPhotos()" style="position:absolute; top:3px; left:3px; border:none; border-radius:50%; width:22px; height:22px; cursor:pointer; background:#000a; color:#fff">★</button>` : ''}
+    </div>`).join('');
+}
+async function uploadPhotos() {
+  const ids = [];
+  for (let i = 0; i < PHOTOS.length; i++) {
+    msg(`Uploading photo ${i + 1} of ${PHOTOS.length}…`);
+    const f = PHOTOS[i].file;
+    const r = await (await fetch('/api/upload_image?name=' + encodeURIComponent(f.name), {method: 'POST', headers: {'Content-Type': f.type}, body: f})).json();
+    if (r.error) throw new Error(`${f.name}: ${r.error}`);
+    ids.push(r.id);
+  }
+  return ids;
 }
 function setCol(cls, on){ document.querySelectorAll('.'+cls).forEach(c=>c.checked=on); }
 document.getElementById('src').addEventListener('change', buildMatrix);
@@ -102,11 +142,12 @@ async function create() {
   const audio_langs = [...document.querySelectorAll('.au:checked')].map(c=>c.dataset.l);
   if (!translate_langs.length && !audio_langs.length) { msg('Pick at least one Translate or Audio option.', true); return; }
   const btn = document.getElementById('submit'); btn.disabled = true;
-  msg('Creating temple in WordPress…');
   try {
+    const photo_ids = await uploadPhotos();
+    msg('Creating temple in WordPress…');
     const res = await (await fetch('/api/create_temple', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ title, content, source_lang: src, translate_langs, audio_langs })
+      body: JSON.stringify({ title, content, source_lang: src, translate_langs, audio_langs, photo_ids })
     })).json();
     if (res.error) { msg('Error: '+res.error, true); btn.disabled=false; return; }
     msg('');
@@ -114,11 +155,13 @@ async function create() {
     document.getElementById('result').innerHTML =
       `<div class="card"><h3>✓ Temple created (ID ${res.temple_id})</h3>
        ${det}
-       <p>Queued as job #${res.job_id}. Watch it on the <a href="/process">Process Temples</a> page (Jobs section).</p>
-       <a href="${res.link}" target="_blank"><button class="btn ghost">Open temple in WordPress</button></a></div>`;
+       <p>Created as a <b>Draft</b> and queued as job #${res.job_id} — follow it under <a href="/">Recent jobs</a> on Home.
+          When it finishes, open it in WordPress to add photos, State / City / Category, then publish.</p>
+       <a href="${res.edit_link}" target="_blank"><button class="btn ghost">Open in the WordPress editor</button></a></div>`;
     document.getElementById('title').value=''; document.getElementById('content').value='';
+    PHOTOS = []; drawPhotos();
     btn.disabled = false;
-  } catch(e) { msg('Failed: '+e, true); btn.disabled=false; }
+  } catch(e) { msg('Failed: ' + e.message + ' — nothing was created; fix it and press Create again.', true); btn.disabled=false; }
 }
 function msg(t, err){ const m=document.getElementById('msg'); m.textContent=t; m.style.color = err ? '#c0392b' : ''; }
 </script>

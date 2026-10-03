@@ -23,6 +23,9 @@ Usage:
     python migrate_to_live.py --go --temple 29090   # one temple, read from staging
     python migrate_to_live.py --go --only 5   # first 5 temples (test the path)
     python migrate_to_live.py --go --force    # overwrite live fields that already have data
+    python migrate_to_live.py --go --text-only   # skip audio; fast pass, text only
+    python migrate_to_live.py --go --offset 500 --only 500   # the NEXT 500, skip the first 500
+    python migrate_to_live.py --go --text-only --continue    # auto-resume from the last run's stopping point
 
 Needs in .env:
     LIVE_WP_URL=  LIVE_WP_USER=  LIVE_WP_APP_PASSWORD=
@@ -49,7 +52,27 @@ from app.tasks.source_detect import visible_text_length
 
 DRY = "--go" not in sys.argv
 FORCE = "--force" in sys.argv
+# --text-only : skip audio entirely. Text writes are one small JSON POST per
+# temple; audio means downloading + re-uploading a file per language, which is
+# the actual bottleneck (measured: ~28s/temple average with audio, most of it
+# spent on file transfer). Run this first for a fast pass that gets every
+# language's TEXT live everywhere, then a normal run afterward fills in audio
+# in the background -- it naturally skips the text this pass already wrote.
+TEXT_ONLY = "--text-only" in sys.argv
 ONLY = int(sys.argv[sys.argv.index("--only") + 1]) if "--only" in sys.argv else None
+# --offset N : skip the first N temples in the (alphabetically-sorted)
+# inventory -- pair with --only to explicitly grab the NEXT batch instead of
+# re-scanning a batch that already finished (harmless since every check is
+# idempotent, but a full re-scan of e.g. 500 done temples costs several
+# minutes of reads for nothing).
+OFFSET = int(sys.argv[sys.argv.index("--offset") + 1]) if "--offset" in sys.argv else 0
+# --continue : auto-resume from wherever the last run left off, using the
+# position saved after every single temple (see PROGRESS below) -- no more
+# manually computing --offset from a printed count. Assumes the inventory
+# file's order doesn't change between runs (true as long as nobody re-sorts
+# or rebuilds it mid-migration).
+CONTINUE = "--continue" in sys.argv
+PROGRESS = Path("migrate_progress.json")
 # --min-audio N : only temples that already have N languages voiced on staging.
 # Used to migrate the fully-finished temples (all 10) ahead of the partial ones.
 MIN_AUDIO = int(sys.argv[sys.argv.index("--min-audio") + 1]) if "--min-audio" in sys.argv else 0
@@ -205,6 +228,14 @@ def main() -> None:
         print("   audio " + (",".join(items[0]["audio"]) or "none"))
     else:
         items = json.loads(INVENTORY.read_text(encoding="utf-8"))
+    resume_at = OFFSET
+    if CONTINUE and PROGRESS.exists():
+        resume_at = json.loads(PROGRESS.read_text(encoding="utf-8"))["last_index"]
+        print(f"--continue: resuming from temple #{resume_at + 1} (saved by the last run)")
+    if resume_at:
+        items = items[resume_at:]
+        if not CONTINUE:
+            print(f"--offset {resume_at}: starting at temple #{resume_at + 1} of the inventory")
     if MIN_AUDIO:
         before = len(items)
         items = [i for i in items if len(i["audio"]) >= MIN_AUDIO]
@@ -212,6 +243,14 @@ def main() -> None:
     if ONLY:
         items = items[:ONLY]
     print(f"{'DRY RUN -- nothing will be written' if DRY else 'MIGRATING'}: {len(items)} temples\n")
+
+    def save_progress(n: int) -> None:
+        # Only advance the saved pointer once a temple's outcome is settled
+        # and not DRY (a dry run must never make --continue skip real work).
+        # A LOOKUP FAILED is deliberately NOT saved here -- it's transient, so
+        # the next --continue run should retry that same temple, not skip it.
+        if not DRY:
+            PROGRESS.write_text(json.dumps({"last_index": resume_at + n}), encoding="utf-8")
 
     stats = {"matched": 0, "missing": 0, "text": 0, "audio": 0, "skipped": 0, "failed": 0}
     for n, it in enumerate(items, 1):
@@ -224,6 +263,7 @@ def main() -> None:
         if not live:
             print(f"[{n}/{len(items)}] {it['slug'][:44]}  NOT ON LIVE -- skipped")
             stats["missing"] += 1
+            save_progress(n)
             continue
         stats["matched"] += 1
         live_acf = live.get("acf") or {}
@@ -266,6 +306,9 @@ def main() -> None:
             stats["text"] += len(updates)
 
         # --- audio: re-upload each file, then point the ACF field at the new id
+        if TEXT_ONLY:
+            save_progress(n)
+            continue
         for lang, att in zip(it["audio"], it["aids"]):
             f = wp.AUDIO_FIELD_KEYS.get(lang)
             if not f or not att:
@@ -284,6 +327,7 @@ def main() -> None:
             except Exception as e:  # noqa: BLE001 -- one file must not stop the run
                 print(f"        [{lang}] AUDIO COPY FAILED: {e}")
                 stats["failed"] += 1
+        save_progress(n)
 
     print("\n" + json.dumps(stats, indent=2))
     if DRY:

@@ -201,15 +201,16 @@ def translate(text: str, source_lang: str, target_lang: str) -> str:
     return out
 
 
-_DETECT_CODES = ("mr", "en", "hi", "gj", "ta", "te", "ml", "kn")
+_DETECT_CODES = ("mr", "en", "hi", "gj", "ta", "te", "ml", "kn", "bn", "pa")
 _DETECT_NAMES = {"marathi": "mr", "english": "en", "hindi": "hi", "gujarati": "gj",
-                 "tamil": "ta", "telugu": "te", "malayalam": "ml", "kannada": "kn"}
+                 "tamil": "ta", "telugu": "te", "malayalam": "ml", "kannada": "kn",
+                 "bengali": "bn", "punjabi": "pa"}
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=15),
        retry=retry_if_exception_type((httpx.HTTPError,)), reraise=True)
 def detect_language(text: str):
-    """Identify which of our 8 languages `text` is in. Returns a code (e.g. 'ta') or None.
+    """Identify which of our 10 languages `text` is in. Returns a code (e.g. 'ta') or None.
     Only call this when the source language is genuinely unknown ('Other') — for known
     languages, pass the code straight through and skip this call."""
     import re as _re
@@ -217,7 +218,8 @@ def detect_language(text: str):
     if not sample:
         return None
     prompt = ("Identify the language of the text below. Reply with EXACTLY ONE code and nothing else:\n"
-              "mr=Marathi, en=English, hi=Hindi, gj=Gujarati, ta=Tamil, te=Telugu, ml=Malayalam, kn=Kannada.\n\n"
+              "mr=Marathi, en=English, hi=Hindi, gj=Gujarati, ta=Tamil, te=Telugu, ml=Malayalam, kn=Kannada, "
+              "bn=Bengali, pa=Punjabi.\n\n"
               "Text:\n" + sample)
     payload = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],

@@ -19,3 +19,4 @@ uvicorn
 # Audio stitching uses Python's stdlib `wave` (no pydub/audioop — works on Python 3.13+).
 # MP3 compression is optional and uses ffmpeg if present (Docker: apt-get install -y ffmpeg);
 # without ffmpeg the task outputs WAV.
+requests  # google-auth's token refresh (sheet sync)

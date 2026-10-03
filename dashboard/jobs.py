@@ -35,6 +35,42 @@ _started = False
 # cancelled cooperatively -- Python cannot kill a thread mid-request, so the
 # pipeline checks this at safe points and stops there.
 _cancelled: set[int] = set()
+# Set when a provider stops accepting requests (credit ran out). While set, the
+# workers hold every job instead of burning through the queue failing each one:
+# when Gemini's prepaid credit ran out, 151 temples "finished" with nothing
+# written. Cleared by resume() once someone has topped up.
+_paused: dict | None = None
+_running = threading.Event()
+_running.set()
+
+# How a provider says "no more credit": Gemini 402 Payment Required; Sarvam puts
+# its reason in the error text. Gemini has also answered a depleted balance with
+# 429 on every language, which only counts when the job wrote nothing at all --
+# a stray 429 is just rate limiting that the retries already absorbed.
+# Not bare "credit"/"quota": pipeline.py's own "only 6/9 written" error says
+# "check the provider's credits/quota" for any partial failure.
+_CREDIT_WORDS = ("402 payment required", "insufficient", "depleted", "billing",
+                 "quota exceeded", "exceeded your current quota", "out of credit")
+
+
+def out_of_credit(text: str) -> str | None:
+    """The provider that ran out ("Gemini" / "Sarvam"), or None if this failure is something else."""
+    t = text.lower()
+    if not (any(w in t for w in _CREDIT_WORDS) or ("429" in t and "only 0/" in t)):
+        return None
+    return "Sarvam" if "sarvam" in t else "Gemini" if ("generativelanguage" in t or "gemini" in t) else "the AI provider"
+
+
+def paused() -> dict | None:
+    return _paused
+
+
+def resume() -> int:
+    """Start the queue again (after a top-up). Returns how many jobs are waiting."""
+    global _paused
+    _paused = None
+    _running.set()
+    return queue_depth()
 
 
 def _now() -> str:
@@ -160,6 +196,28 @@ def _sync_sheet(job: dict) -> None:
         _log(job, f"sheet sync skipped: {e}")
 
 
+def _recount() -> None:
+    """Batch finished: refresh the Home page's "left to do" numbers. Best-effort."""
+    try:
+        from dashboard import main
+        main.refresh_backlog_async()
+    except Exception:
+        pass
+
+
+def _pause(job: dict, provider: str) -> None:
+    """Credit ran out mid-job: stop the queue and put this job back in line.
+    Languages it already saved stay saved; the re-run only fills the gaps."""
+    global _paused
+    if _paused is None:
+        _paused = {"provider": provider, "since": _now(), "temple": job["temple_title"]}
+        _running.clear()
+    job["status"] = "queued"
+    job["error"] = None
+    _log(job, f"PAUSED: {provider} is out of credit. Waiting in the queue - top up, then press Resume.")
+    _q.put(job["id"])
+
+
 def _worker() -> None:
     while True:
         try:
@@ -167,12 +225,15 @@ def _worker() -> None:
         except Exception:
             continue
         try:
+            _running.wait()  # paused for credit: hold the job, don't fail it
             job = _jobs.get(jid)
             if job and (job["status"] == "cancelled" or jid in _cancelled):
                 continue  # cancelled while it sat in the queue
             if job:
                 job["status"] = "running"
                 job["started_at"] = _now()
+                job["error"] = None
+                first_line = len(job["logs"])  # only this run's lines decide a credit pause
                 _save()
                 try:
                     process_temple(
@@ -193,9 +254,17 @@ def _worker() -> None:
                     _log(job, f"ERROR: {e}")
                 finally:
                     _cancelled.discard(jid)
-                    job["finished_at"] = _now()
+                    provider = job["status"] == "failed" and out_of_credit(
+                        "\n".join(job["logs"][first_line:]) + "\n" + (job["error"] or ""))
+                    if provider:
+                        _pause(job, provider)
+                    else:
+                        job["finished_at"] = _now()
                     _save()
-                    _sync_sheet(job)
+                    if not provider:
+                        _sync_sheet(job)
+                        if queue_depth() == 0:
+                            _recount()
         except Exception:
             pass  # a single bad job must never kill the worker thread
         finally:
