@@ -83,3 +83,12 @@ def detect_source_language(
         qualified=qualified,
         ambiguous=len(qualified) > 1,
     )
+
+
+def pick_source(fields: Dict[str, Optional[str]]) -> Optional[str]:
+    """The language to translate FROM: Marathi > English > Hindi when any of them has
+    an article; otherwise the longest article in any other language. That second step
+    is for temples added in, say, Tamil ("Other" on Add Temple): without it they had
+    "no article to translate from" and could never be re-run or counted."""
+    return (detect_source_language(fields).source
+            or detect_source_language(fields, candidates=tuple(fields), priority=None).source)

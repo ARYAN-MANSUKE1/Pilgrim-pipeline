@@ -7,6 +7,7 @@ Run:  python test_source_detect.py
 
 from app.tasks.source_detect import (
     detect_source_language,
+    pick_source,
     visible_text_length,
 )
 
@@ -44,6 +45,12 @@ check("default priority mr>en>hi picks mr", r.source == "mr")
 r = detect_source_language({"mr": BODY_MR, "en": BODY_EN, "hi": ""}, priority=("en", "mr", "hi"))
 check("priority picks en over mr", r.source == "en")
 
+
+# 6) A temple written only in another language (added via "Other"): that language is the source.
+BODY_TA = "<p>" + ("இந்தக் கோயில் ஒரு ஆற்றின் கரையில் அமைந்துள்ளது. " * 12) + "</p>"
+check("tamil-only temple -> source ta", pick_source({"mr": "", "en": "", "hi": None, "ta": BODY_TA, "gj": PLACEHOLDER}) == "ta")
+check("...but Marathi/English/Hindi still win when present", pick_source({"mr": "", "en": BODY_EN, "hi": "", "ta": BODY_TA}) == "en")
+check("nothing anywhere -> no source", pick_source({"mr": "", "en": PLACEHOLDER, "ta": IMG_ONLY}) is None)
 
 print("--- checks ---")
 ok = True

@@ -17,7 +17,7 @@ from app.tasks.gemini_translate import translate as gtranslate
 from app.tasks.field_checks import content_problem, script_frac
 from app.tasks.safe_translate import (content_needs_work, title_needs_work, translate_article,
                                       translate_title)
-from app.tasks.source_detect import detect_source_language, visible_text_length
+from app.tasks.source_detect import pick_source, visible_text_length
 from app.tasks.structured_translate import strip_cosmetic_spans, strip_tags
 
 WP_BASE = settings.wp_url.rstrip("/") + "/wp-json/wp/v2"
@@ -85,7 +85,7 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
     content = {l: strip_cosmetic_spans(acf.get(f) or "") for l, f in wp.CONTENT_FIELD_KEYS.items()}
     titles = {l: (acf.get(f) or "") for l, f in wp.TITLE_FIELD_KEYS.items()}
 
-    src = source or detect_source_language(content, candidates=("mr", "en", "hi")).source
+    src = source or pick_source(content)
     if not src or visible_text_length(content.get(src, "")) < MIN_CHARS:
         raise RuntimeError("This temple has no article to translate from yet - add its content "
                            "(Marathi, English or Hindi) in WordPress first.")

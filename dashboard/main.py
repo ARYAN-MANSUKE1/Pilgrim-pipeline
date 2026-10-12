@@ -37,7 +37,7 @@ from app.tasks import language_registry
 from app.tasks import wp_client as wp
 from app.tasks.chrome_sync import sync_chrome_parallel
 from app.tasks.nav_menu_i18n import sync_nav_menu_items
-from app.tasks.source_detect import detect_source_language, visible_text_length
+from app.tasks.source_detect import pick_source, visible_text_length
 from dashboard import jobs, sheet_sync
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -110,10 +110,7 @@ def _status(acf: dict) -> dict:
     """Per-language content length + audio presence + detected source for one temple."""
     content = {l: visible_text_length(acf.get(f) or "") for l, f in wp.CONTENT_FIELD_KEYS.items()}
     audio = {l: bool(acf.get(af)) for l, af in wp.AUDIO_FIELD_KEYS.items()}
-    src = detect_source_language(
-        {l: acf.get(f) or "" for l, f in wp.CONTENT_FIELD_KEYS.items()},
-        candidates=("mr", "en", "hi"),
-    ).source
+    src = pick_source({l: acf.get(f) or "" for l, f in wp.CONTENT_FIELD_KEYS.items()})
     return {"content": content, "audio": audio, "source": src}
 
 
