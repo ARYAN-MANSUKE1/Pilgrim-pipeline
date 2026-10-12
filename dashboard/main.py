@@ -134,6 +134,7 @@ def list_temples(page: int = 1, per_page: int = Query(20, le=100), search: str =
     except httpx.HTTPError as e:
         return {"error": f"Could not reach WordPress: {e}", "total": 0, "pages": 1,
                 "page": page, "per_page": per_page, "langs": current_langs,
+                "audio_enabled": settings.audio_enabled, "names": LANG_NAMES,
                 "min_chars": MIN_CHARS, "temples": []}
     temples = []
     for t in r.json():
@@ -153,6 +154,8 @@ def list_temples(page: int = 1, per_page: int = Query(20, le=100), search: str =
         "page": page,
         "per_page": per_page,
         "langs": current_langs,
+        "names": LANG_NAMES,
+        "audio_enabled": settings.audio_enabled,
         "min_chars": MIN_CHARS,
         "temples": temples,
     }
@@ -179,7 +182,7 @@ def _fetch_page(page: int, per_page: int = 100):
     return r
 
 
-def _csv_row(t: dict, ledger: dict, live: dict | None) -> list:
+def _csv_row(t: dict, ledger: dict, live) -> list:
     acf = t.get("acf") or {}
     st = _status(acf)
     text_done = [l for l, n in st["content"].items() if n >= MIN_CHARS]
@@ -196,7 +199,8 @@ def _csv_row(t: dict, ledger: dict, live: dict | None) -> list:
         len(text_done), len(audio_done),
         f"{tr:.2f}", f"{au:.2f}", f"{tr + au:.2f}",
         "measured" if measured else "estimated",
-        *(live.get(t.get("slug", ""), [NOT_ON_LIVE, ""]) if live is not None else [LIVE_UNCHECKED, ""]),
+        *(_live_cells(t) if live is SAME_SITE
+          else live.get(t.get("slug", ""), [NOT_ON_LIVE, ""]) if live is not None else [LIVE_UNCHECKED, ""]),
     ]
 
 
@@ -221,7 +225,9 @@ def _export_rows():
     # Best-effort: the live columns are extra information, so live being slow or
     # unreachable must not cost the user the whole export.
     try:
-        live = _live_index()
+        # Pointed at live already: the temple being exported IS the live temple, so
+        # reading the whole site a second time would only double the wait.
+        live = SAME_SITE if _is_live() else _live_index()
     except httpx.HTTPError as e:
         log.warning("export: live site not checked (%s)", e)
         live = None
@@ -276,6 +282,11 @@ def _sheet_row_for(t: dict) -> list:
 LIVE_BASE = settings.live_wp_url.rstrip("/") + "/wp-json/wp/v2"
 LIVE_AUTH = (settings.live_wp_user, settings.live_wp_app_password)
 NOT_ON_LIVE = "Not on live"
+SAME_SITE = object()  # marker: this dashboard is pointed at the live site itself
+
+
+def _is_live() -> bool:
+    return bool(settings.live_wp_url) and settings.live_wp_url.rstrip("/") == settings.wp_url.rstrip("/")
 LIVE_UNCHECKED = "Could not check live"
 
 
@@ -392,6 +403,16 @@ class RunReq(BaseModel):
 @app.post("/api/run")
 def run(req: RunReq):
     """Enqueue a background job per selected temple."""
+    if not settings.audio_enabled:
+        if req.translate_langs is None and req.audio_langs is None:
+            if req.operation == "audio":
+                return {"error": AUDIO_OFF, "queued": 0, "job_ids": []}
+        else:
+            req.audio_langs = []
+            if not req.translate_langs:
+                return {"error": AUDIO_OFF, "queued": 0, "job_ids": []}
+    if not req.temples:
+        return {"error": "Select at least one temple first.", "queued": 0, "job_ids": []}
     ids = []
     for t in req.temples:
         jid = jobs.enqueue(
@@ -451,11 +472,17 @@ def health():
 # a restart shows numbers immediately.
 # ponytail: a full re-count each time, not per-temple updates; fine at ~2,300
 # temples. Upgrade path: a WP-side endpoint returning field lengths only.
+AUDIO_OFF = ("Audio generation is switched off for now. To turn it on, set AUDIO_ENABLED=1 "
+             "in the .env file and restart the dashboard.")
 BACKLOG_FILE = Path(__file__).parent / "backlog.json"
 BACKLOG_EVERY = 30 * 60
 _backlog: dict = {"counted_at": None, "counting": False, "error": None, "data": None}
 try:
-    _backlog.update(json.loads(BACKLOG_FILE.read_text(encoding="utf-8")))
+    _saved = json.loads(BACKLOG_FILE.read_text(encoding="utf-8"))
+    # Counts (and the temple ids behind "Translate all") from another website must
+    # never be shown or queued here -- e.g. staging's numbers after switching to live.
+    if _saved.get("site") == settings.wp_url:
+        _backlog.update(_saved)
     _backlog["counting"] = False
 except Exception:
     pass
@@ -518,6 +545,7 @@ def refresh_backlog_async() -> bool:
             _backlog["data"] = _count_backlog()
             _backlog["counted_at"] = jobs._now()
             _backlog["error"] = None
+            _backlog["site"] = settings.wp_url
             BACKLOG_FILE.write_text(json.dumps(_backlog), encoding="utf-8")
         except Exception as e:  # noqa: BLE001 -- shown on the Home page
             _backlog["error"] = f"Could not count temples: {e}"
@@ -548,6 +576,8 @@ def run_backlog(req: BacklogRunReq):
     """Queue every temple the last count found still needing translation (or audio).
     The pipeline only fills what is missing, so every language can be asked for.
     Temples already queued or running are not queued twice."""
+    if req.kind == "audio" and not settings.audio_enabled:
+        return {"error": AUDIO_OFF}
     data = _backlog.get("data") or {}
     refs = (data.get("todo") or {}).get(req.kind)
     if req.kind not in ("text", "audio") or refs is None:
@@ -590,6 +620,8 @@ def stats():
         "jobs_failed": sum(1 for j in js if j["status"] == "failed"),
         "queue_depth": jobs.queue_depth(),
         "paused": jobs.paused(),
+        "audio_enabled": settings.audio_enabled,
+        "site": settings.wp_url,
         "spent_today": costs.spent_on(date.today().isoformat()),
         "per_language_inr": costs.per_language_inr(),
         # the to-do id lists stay server-side: the page only needs the counts
@@ -667,7 +699,8 @@ def create_temple(req: CreateReq):
     op_label = "+".join(x for x in ("translate" if req.translate_langs else "",
                                     "audio" if req.audio_langs else "") if x) or "none"
     jid = jobs.enqueue(pid, title, op_label, None, source_lang,
-                       translate_langs=req.translate_langs, audio_langs=req.audio_langs)
+                       translate_langs=req.translate_langs,
+                       audio_langs=req.audio_langs if settings.audio_enabled else [])
     return {"temple_id": pid, "job_id": jid, "link": post.get("link", ""),
             "edit_link": f"{settings.wp_url.rstrip('/')}/wp-admin/post.php?post={pid}&action=edit",
             "source_lang": source_lang, "detected": detected}
@@ -780,7 +813,7 @@ def all_langs():
             names.setdefault(code, lang.get("name", code))
     except Exception:
         pass  # registry unreachable -- fall back to the static names we already have
-    return {"langs": list(wp.CONTENT_FIELD_KEYS), "names": names}
+    return {"langs": list(wp.CONTENT_FIELD_KEYS), "names": names, "audio_enabled": settings.audio_enabled}
 
 
 
@@ -934,7 +967,15 @@ def _save_ad(req: AdReq, ad_id: int | None) -> dict:
         return {"error": f"Could not reach WordPress: {e}"}
     if r.status_code not in (200, 201):
         return {"error": f"WordPress refused the save ({r.status_code}): {r.text[:200]}"}
-    return {"id": r.json()["id"]}
+    saved = r.json()
+    # WordPress silently drops fields the theme has not registered. Without this check
+    # an older functions.php would leave a published, empty campaign behind.
+    if (saved.get("meta") or {}).get("placement") != req.placement:
+        if not ad_id:
+            httpx.delete(f"{WP_BASE}/advertisements/{saved['id']}", params={"force": "true"}, auth=AUTH, timeout=60)
+        return {"error": "The website did not save the campaign's details - its theme (functions.php) is missing the "
+                         "\"Ad fields for the dashboard's Ads tab\" code. Nothing was created."}
+    return {"id": saved["id"]}
 
 
 @app.post("/api/ads")
@@ -973,6 +1014,11 @@ def delete_ad(ad_id: int):
 # showed in one browser and not another until a hard reload).
 def _page(name: str) -> FileResponse:
     return FileResponse(STATIC / name, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
 
 
 @app.get("/")

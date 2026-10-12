@@ -33,7 +33,7 @@
     <h1 class="page">Ad campaigns
       <button class="btn" style="float:right" onclick="openForm()">+ New campaign</button></h1>
     <p class="muted" style="margin-top:-8px">Ads appear on temple pages in the chosen states / districts, only between the start and end dates, and only while Active.
-      Changes reach the website within about 20 minutes — or straight away after <b>clearing the 10Web cache</b>.</p>
+      Changes are saved straight away. Visitors may keep seeing the previous version of a page until you <b>clear the 10Web cache</b> (WordPress → Manage 10WEB Cache).</p>
 
     <div class="cards" style="margin:16px 0 22px">
       <div class="card"><p>Running right now</p><div class="stat" id="s-running">…</div></div>
@@ -59,7 +59,7 @@
       <div class="field" style="margin-bottom:16px">
         <span style="display:block; font-size:13px; font-weight:600; margin-bottom:6px">Ad image</span>
         <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap">
-          <img id="f-preview" class="thumb" style="width:120px; height:90px; object-fit:contain" alt="">
+          <img id="f-preview" class="thumb" style="width:120px; height:90px; object-fit:contain; visibility:hidden" alt="" onload="this.style.visibility='visible'">
           <input type="file" id="f-image" accept="image/jpeg,image/png,image/webp,image/gif" onchange="pickImage(this.files[0])">
         </div>
         <div class="hint" id="f-sizehint"></div>
@@ -96,10 +96,10 @@
 let ADS = [], PLACEMENTS = {}, STATES = [], CITY_NAME = {}, editing = null, imageId = 0, imageFile = null;
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const SIZE_HINT = {
-  temple_right: 'Tall image for the side column, e.g. 300 × 600 px (shown about 160 px wide).',
-  temple_left: 'Tall image for the side column, e.g. 300 × 600 px (shown about 160 px wide).',
-  temple_top: 'Wide banner, e.g. 1200 × 200 px (shown across the full width).',
-  temple_bottom: 'Wide banner, e.g. 1200 × 200 px (shown across the article width, below the article).',
+  temple_right: 'Side column: 160 × 600 px (desktop only, hidden on phones).',
+  temple_left: 'Side column: 160 × 600 px (desktop only, hidden on phones).',
+  temple_top: 'Banner: 728 × 90 px (stretches to the page width; phones show the same image).',
+  temple_bottom: 'Banner: 728 × 90 px, shown below the article (phones show the same image).',
 };
 function sizeHint() { document.getElementById('f-sizehint').textContent = SIZE_HINT[document.getElementById('f-placement').value]; }
 
@@ -159,7 +159,8 @@ function openForm(id) {
   document.getElementById('f-status').value = ['active', 'paused', 'draft'].includes(a.campaign_status) ? a.campaign_status : 'active';
   document.getElementById('f-price').value = a.campaign_price || '';
   imageId = Number(a.ad_creative) || 0; imageFile = null;
-  document.getElementById('f-preview').src = a.image_url || '';
+  const pv = document.getElementById('f-preview'); pv.style.visibility = 'hidden';
+  if (a.image_url) pv.src = a.image_url; else pv.removeAttribute('src');
   document.getElementById('f-image').value = '';
   const chosen = new Set((a.target_cities || []).map(String));
   document.querySelectorAll('.city').forEach(c => { c.disabled = false; c.checked = chosen.has(c.value); });
@@ -201,7 +202,7 @@ async function save() {
     const r = await (await fetch('/api/ads' + (editing ? '/' + editing.id : ''), {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)})).json();
     if (r.error) throw new Error(r.error);
     closeForm(); await load();
-    alert('Saved. It reaches the website within about 20 minutes — clear the 10Web cache to see it straight away.');
+    alert('Saved.\n\nTo make sure every visitor sees it, clear the 10Web cache in WordPress (Manage 10WEB Cache).');
   } catch (e) { msg(e.message, true); }
   btn.disabled = false;
 }

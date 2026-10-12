@@ -63,6 +63,10 @@ class Settings(BaseSettings):
 
     # --- Dashboard login (HTTP Basic). With no password set, the dashboard only
     # answers on this computer (localhost), so a hosted copy is never left open.
+    # Audio generation is ON HOLD (client decision, Oct 2026): it is the expensive half
+    # (~Rs 15 per language per temple on Bulbul v3). Everything is still here; set
+    # AUDIO_ENABLED=1 in .env to switch the audio buttons and jobs back on.
+    audio_enabled: bool = False
     dashboard_user: str = "admin"
     dashboard_password: str = ""
     sheet_limit: int = 30      # rows to keep in the sheet; 0 = every temple

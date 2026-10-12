@@ -148,7 +148,12 @@ def per_language_inr() -> dict[str, float]:
         pdf = [v[i] for v in PDF_EST.values() if v[i]]
         # the PDF audio averages are Bulbul v2; v3 bills 2x per character
         scale = 2.0 if kind == "audio" and "v3" in settings.sarvam_model else 1.0
-        out[kind] = round(sum(vals) / len(vals), 2) if len(vals) >= 20 else round(scale * sum(pdf) / len(pdf), 2)
+        fallback = scale * sum(pdf) / len(pdf)
+        if kind == "translation":
+            # The PDF averages predate gemini-3.1-flash-lite. Measured on the live-only
+            # temples (Sept 2026): Rs 4.7 per temple for 9 languages = ~Rs 0.52 each.
+            fallback = 0.55
+        out[kind] = round(sum(vals) / len(vals), 2) if len(vals) >= 20 else round(fallback, 2)
     return out
 
 

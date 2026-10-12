@@ -11,6 +11,7 @@ function update_post_meta( $id, $k, $v ) { global $META; $META[ $id ][ $k ] = $v
 function wp_get_post_terms( $id, $t, $a ) { global $TEMPLE_CITIES; return $TEMPLE_CITIES; }
 function get_term_children( $id, $t ) { global $CHILDREN; return isset( $CHILDREN[ $id ] ) ? $CHILDREN[ $id ] : array(); }
 function get_transient( $k ) { return false; }
+function get_option( $k, $d = false ) { return $d; }
 function set_transient( $k, $v, $t ) {}
 function is_singular( $t ) { return true; }
 function get_the_ID() { return 99; }

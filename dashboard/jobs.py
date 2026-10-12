@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import queue
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,11 @@ _cancelled: set[int] = set()
 _paused: dict | None = None
 _running = threading.Event()
 _running.set()
+# Consecutive failures that look like "the whole thing is broken" (bad key, provider
+# or WordPress down) rather than one temple's own problem. At _MAX_STREAK the queue
+# pauses instead of marking every remaining temple failed.
+_fail_streak = 0
+_MAX_STREAK = 5
 
 # How a provider says "no more credit": Gemini 402 Payment Required; Sarvam puts
 # its reason in the error text. Gemini has also answered a depleted balance with
@@ -65,10 +71,18 @@ def paused() -> dict | None:
     return _paused
 
 
+def _own_problem(error: str) -> bool:
+    """A failure that says something about THIS temple, not about the system."""
+    e = error or ""
+    return ("no article to translate from" in e or e.startswith("Source content")
+            or bool(re.match(r"only [1-9]\d*/", e)))
+
+
 def resume() -> int:
     """Start the queue again (after a top-up). Returns how many jobs are waiting."""
-    global _paused
+    global _paused, _fail_streak
     _paused = None
+    _fail_streak = 0
     _running.set()
     return queue_depth()
 
@@ -128,6 +142,7 @@ def enqueue(temple_id, temple_title, operation, languages, source,
             "translate_langs": translate_langs, "audio_langs": audio_langs, "force": force,
             "status": "queued", "logs": [], "error": None,
             "queued_at": _now(), "started_at": None, "finished_at": None,
+            "site": settings.wp_url,  # temple ids only mean something on this site
         }
     _q.put(jid)
     _save()
@@ -218,6 +233,20 @@ def _pause(job: dict, provider: str) -> None:
     _q.put(job["id"])
 
 
+def _note_result(job: dict) -> None:
+    """Track the failure streak; pause when several temples in a row fail the same
+    systemic way (and there is still a queue left to protect)."""
+    global _paused, _fail_streak
+    if job["status"] == "done":
+        _fail_streak = 0
+    elif job["status"] == "failed" and not _own_problem(job["error"]):
+        _fail_streak += 1
+        if _fail_streak >= _MAX_STREAK and _paused is None and queue_depth() > 0:
+            _paused = {"provider": None, "since": _now(), "temple": job["temple_title"],
+                       "reason": (job["error"] or "")[:300], "streak": _fail_streak}
+            _running.clear()
+
+
 def _worker() -> None:
     while True:
         try:
@@ -260,6 +289,7 @@ def _worker() -> None:
                         _pause(job, provider)
                     else:
                         job["finished_at"] = _now()
+                        _note_result(job)
                     _save()
                     if not provider:
                         _sync_sheet(job)
@@ -286,11 +316,19 @@ def start_worker() -> None:
         return
     _started = True
     _load()
-    # Resume: re-queue anything that was queued or interrupted mid-run.
+    # Resume: re-queue anything that was queued or interrupted mid-run -- but only
+    # jobs queued for THIS website. A temple id from staging is a different temple
+    # on live; resuming it after WP_URL changed would translate the wrong one.
     with _lock:
         pending = [jid for jid, j in _jobs.items() if j["status"] in ("queued", "running")]
     for jid in pending:
-        _jobs[jid]["status"] = "queued"
+        job = _jobs[jid]
+        if job.get("site", settings.wp_url) != settings.wp_url:
+            job["status"] = "cancelled"
+            job["finished_at"] = _now()
+            _log(job, f"not resumed: it was queued for a different website ({job.get('site')})")
+            continue
+        job["status"] = "queued"
         _q.put(jid)
     if pending:
         _save()

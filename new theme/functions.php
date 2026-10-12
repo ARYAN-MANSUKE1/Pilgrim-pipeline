@@ -345,7 +345,9 @@ function pds_get_matching_ad( $slot ) {
 	$city_terms = wp_get_post_terms( $temple_id, 'city', array( 'fields' => 'ids' ) );
 	if ( empty( $city_terms ) || is_wp_error( $city_terms ) ) return false;
 
-	$cache_key = 'pds_ad_' . $temple_id . '_' . sanitize_key( $slot );
+	// The version is part of the key: bumping it (pds_flush_ad_cache) orphans every cached
+	// pick at once, whether transients live in the options table or in an object cache.
+	$cache_key = 'pds_ad_' . (int) get_option( 'pds_ad_cache_ver', 1 ) . '_' . $temple_id . '_' . sanitize_key( $slot );
 	$ad_id     = get_transient( $cache_key );
 
 	if ( false === $ad_id ) {
@@ -458,6 +460,9 @@ add_action( 'wp_footer', function () {
 /* Cache flush: on every ad save, or visit any page with ?pds_flush_ads as an admin. */
 function pds_flush_ad_cache() {
 	global $wpdb;
+	// Deleting rows alone does nothing on hosts with a persistent object cache (live
+	// uses one): a paused or edited ad kept showing for up to 20 minutes.
+	update_option( 'pds_ad_cache_ver', time(), false );
 	return $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_pds_ad_%' OR option_name LIKE '_transient_timeout_pds_ad_%'" );
 }
 add_action( 'save_post_' . PDS_AD_POST_TYPE, function ( $id ) {

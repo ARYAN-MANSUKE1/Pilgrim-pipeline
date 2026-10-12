@@ -87,7 +87,8 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
 
     src = source or detect_source_language(content, candidates=("mr", "en", "hi")).source
     if not src or visible_text_length(content.get(src, "")) < MIN_CHARS:
-        raise RuntimeError(f"No usable source content (source={src!r})")
+        raise RuntimeError("This temple has no article to translate from yet - add its content "
+                           "(Marathi, English or Hindi) in WordPress first.")
     # Translating from a source that is itself in the wrong language would just
     # spread the mistake to every other language. (A leaked batching marker in the
     # source is fine: translate_article strips it.)
@@ -111,6 +112,13 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
         to_translate = [l for l in selected if l != src] if operation in ("translate", "full") else []
         to_audio = (selected if languages else [src] + [l for l in selected if l != src]) \
             if operation in ("audio", "full") else []
+
+    # Audio is switched off by default (settings.audio_enabled). Checked here, the one
+    # place every route into the pipeline passes through, so no button, old queued
+    # job or API call can spend Sarvam credit while it is on hold.
+    if to_audio and not settings.audio_enabled:
+        log("audio is switched off (AUDIO_ENABLED in .env) - no recordings made")
+        to_audio = []
 
     # Never overwrite a language that already has real content -- whether it
     # got there from an earlier pipeline run or was authored independently

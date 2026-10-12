@@ -18,17 +18,17 @@
 
   <div class="wrap" style="max-width:820px">
     <h1 class="page">Add a new temple</h1>
-    <p class="muted" style="margin-top:-10px">Enter the temple in its source language. The pipeline translates it into the other languages, generates audio, and writes it into WordPress.</p>
+    <p class="muted" style="margin-top:-10px">Enter the temple in the language it was written in. It is translated into the languages you tick and saved to the website as a draft.</p>
 
     <div class="card" style="margin-top:16px">
-      <label class="field"><span>Source language</span>
+      <label class="field"><span>Language of your text</span>
         <select id="src">
           <option value="mr" selected>Marathi</option>
           <option value="en">English</option>
           <option value="hi">Hindi</option>
           <option value="other">Other — auto-detect</option>
         </select>
-        <div class="hint">The language your content is in. Pick <b>Other</b> only if it's something unusual (e.g. Tamil) — the agent will detect it. For Marathi/English/Hindi, choosing directly saves a step.</div>
+        <div class="hint">Pick <b>Other</b> only if the text is in another language (e.g. Tamil) — it is then detected automatically.</div>
       </label>
 
       <div class="hint" style="background:#fff6ec; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:16px;">
@@ -39,9 +39,9 @@
         <input type="text" id="title" placeholder="e.g. Ambabai Temple, Jat, Dist. Sangli">
       </label>
 
-      <label class="field"><span>Content (HTML from the WordPress editor, or plain text)</span>
+      <label class="field"><span>Content (plain text, or HTML copied from the WordPress editor)</span>
         <textarea id="content" placeholder="Paste the temple description here. Headings, paragraphs, and &lt;img&gt; tags are all preserved."></textarea>
-        <div class="hint">Per-word &lt;span&gt; wrappers get cleaned automatically; images & paragraph structure are kept.</div>
+        <div class="hint">Leave a blank line between paragraphs. Pictures and headings in the text are kept.</div>
       </label>
 
       <div class="field" style="margin-bottom:16px">
@@ -51,18 +51,18 @@
         <div class="hint">The <b>first photo is the cover image</b>; all of them go into the temple’s photo slider. Click ★ to make a photo the cover, × to remove it. JPG, PNG or WebP, up to 15 MB each.</div>
       </div>
 
-      <label class="field"><span>Languages — choose Translate and/or Audio for each</span>
+      <label class="field"><span>Languages to translate into</span>
         <table style="max-width:460px">
-          <thead><tr><th>Language</th><th style="text-align:center;width:90px">Translate</th><th style="text-align:center;width:70px">Audio</th></tr></thead>
+          <thead><tr><th>Language</th><th style="text-align:center;width:90px">Translate</th><th style="text-align:center;width:90px" id="audiohead">Audio</th></tr></thead>
           <tbody id="matrixbody"></tbody>
         </table>
-        <div class="hint">The source language isn't translated (it's your content) — tick <b>Audio</b> to voice it.
-          Audio costs more, so it's <b>off by default</b>. Use the toggles below to set a column at once.</div>
+        <div class="hint">The language you wrote in isn't translated (it's your content)<span class="audioctl"> — tick <b>Audio</b> to voice it</span>.
+          <span class="audioctl">Audio costs more, so it's <b>off by default</b>.</span> Use the buttons below to set a column at once.</div>
         <div style="margin-top:8px; display:flex; gap:10px; flex-wrap:wrap">
           <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('tr',true)">Translate all</button>
           <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('tr',false)">Translate none</button>
-          <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('au',true)">Audio all</button>
-          <button type="button" class="btn ghost" style="padding:5px 10px" onclick="setCol('au',false)">Audio none</button>
+          <button type="button" class="btn ghost audioctl" style="padding:5px 10px" onclick="setCol('au',true)">Audio all</button>
+          <button type="button" class="btn ghost audioctl" style="padding:5px 10px" onclick="setCol('au',false)">Audio none</button>
         </div>
       </label>
 
@@ -83,6 +83,7 @@
 // language added/removed via the dashboard shows up here automatically.
 let LANGS = [];
 let NAMES = {};
+let AUDIO_ON = false;
 function buildMatrix() {
   const src = document.getElementById('src').value;
   document.getElementById('matrixbody').innerHTML = LANGS.map(l => {
@@ -91,7 +92,7 @@ function buildMatrix() {
                          : `<input type="checkbox" class="tr" data-l="${l}" checked>`;
     return `<tr><td>${NAMES[l] || l}</td>
       <td style="text-align:center">${trCell}</td>
-      <td style="text-align:center"><input type="checkbox" class="au" data-l="${l}"></td></tr>`;
+      <td style="text-align:center">${AUDIO_ON ? `<input type="checkbox" class="au" data-l="${l}">` : '<span class="muted">on hold</span>'}</td></tr>`;
   }).join('');
 }
 // Photos picked but not uploaded yet: uploaded on "Create", so nothing lands in
@@ -119,9 +120,14 @@ async function uploadPhotos() {
   for (let i = 0; i < PHOTOS.length; i++) {
     msg(`Uploading photo ${i + 1} of ${PHOTOS.length}…`);
     const f = PHOTOS[i].file;
-    const r = await (await fetch('/api/upload_image?name=' + encodeURIComponent(f.name), {method: 'POST', headers: {'Content-Type': f.type}, body: f})).json();
-    if (r.error) throw new Error(`${f.name}: ${r.error}`);
-    ids.push(r.id);
+    // Remember what is already uploaded: pressing Create again after fixing an
+    // error must not put a second copy of every photo into the media library.
+    if (!PHOTOS[i].id) {
+      const r = await (await fetch('/api/upload_image?name=' + encodeURIComponent(f.name), {method: 'POST', headers: {'Content-Type': f.type}, body: f})).json();
+      if (r.error) throw new Error(`${f.name}: ${r.error}`);
+      PHOTOS[i].id = r.id;
+    }
+    ids.push(PHOTOS[i].id);
   }
   return ids;
 }
@@ -129,7 +135,8 @@ function setCol(cls, on){ document.querySelectorAll('.'+cls).forEach(c=>c.checke
 document.getElementById('src').addEventListener('change', buildMatrix);
 (async function () {
   const data = await (await fetch('/api/all_langs')).json();
-  LANGS = data.langs; NAMES = data.names;
+  LANGS = data.langs; NAMES = data.names; AUDIO_ON = !!data.audio_enabled;
+  document.querySelectorAll('.audioctl').forEach(b => b.style.display = AUDIO_ON ? '' : 'none');
   buildMatrix();
 })();
 
@@ -140,7 +147,7 @@ async function create() {
   if (!title || !content) { msg('Please fill in a title and content.', true); return; }
   const translate_langs = [...document.querySelectorAll('.tr:checked')].map(c=>c.dataset.l);
   const audio_langs = [...document.querySelectorAll('.au:checked')].map(c=>c.dataset.l);
-  if (!translate_langs.length && !audio_langs.length) { msg('Pick at least one Translate or Audio option.', true); return; }
+  if (!translate_langs.length && !audio_langs.length) { msg(AUDIO_ON ? 'Tick at least one Translate or Audio box.' : 'Tick at least one language to translate into.', true); return; }
   const btn = document.getElementById('submit'); btn.disabled = true;
   try {
     const photo_ids = await uploadPhotos();
@@ -156,7 +163,7 @@ async function create() {
       `<div class="card"><h3>✓ Temple created (ID ${res.temple_id})</h3>
        ${det}
        <p>Created as a <b>Draft</b> and queued as job #${res.job_id} — follow it under <a href="/">Recent jobs</a> on Home.
-          When it finishes, open it in WordPress to add photos, State / City / Category, then publish.</p>
+          When it finishes, open it in WordPress to set State / City / Category, check it, and publish.</p>
        <a href="${res.edit_link}" target="_blank"><button class="btn ghost">Open in the WordPress editor</button></a></div>`;
     document.getElementById('title').value=''; document.getElementById('content').value='';
     PHOTOS = []; drawPhotos();

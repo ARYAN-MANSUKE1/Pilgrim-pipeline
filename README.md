@@ -82,6 +82,7 @@ See `.gitignore`.
 | `LIVE_WP_URL`, `LIVE_WP_USER`, `LIVE_WP_APP_PASSWORD` | The live site, for the "live" columns in the CSV export and sheet |
 | `GOOGLE_SA_JSON`, `SHEET_ID` | Optional: service-account key file + sheet id for the Google Sheet sync |
 | `TTS_SPEAKER` | Sarvam v3 voice (default `priya`; samples in `voice_samples/`) |
+| `AUDIO_ENABLED` | `0` (default): audio generation is switched off everywhere - buttons, queued jobs and API. Set `1` to turn it back on |
 
 Notes:
 
@@ -107,8 +108,10 @@ Open the temple on the staging site to see the result.
 
 ### Run the admin dashboard
 
+On Windows, double-click **`Start Dashboard.bat`**. Or from a terminal:
+
 ```bash
-uvicorn dashboard.main:app --reload --port 8000
+uvicorn dashboard.main:app --port 8000
 ```
 
 Open http://localhost:8000 (on a server: set `DASHBOARD_PASSWORD` first and serve it
@@ -127,7 +130,13 @@ over HTTPS). Pages:
   (`pilgrim/v1/languages`); the current theme has its 10 languages built in.
 
 If Gemini or Sarvam runs out of credit, a red banner names the provider, the queue
-pauses with nothing lost, and **Resume** continues after a top-up.
+pauses with nothing lost, and **Resume** continues after a top-up. The queue also
+pauses when five temples in a row fail for a system reason (wrong API key, provider or
+website down), instead of marking every remaining temple failed.
+
+The website the dashboard reads and writes is shown next to its name on every page.
+Jobs and counts saved for one website are never resumed or shown for another, so
+changing `WP_URL` (for example staging -> live) is safe.
 
 ### Run the checks
 
@@ -137,6 +146,7 @@ python test_structured_translate.py # HTML structure survives translation
 python test_safe_translate.py       # validation + retry, full pipeline flow
 python test_edge_cases.py           # 13 failure modes through the real pipeline
 python test_credit_pause.py         # queue pauses on out-of-credit, resumes
+python test_queue_guards.py         # wrong-site jobs not resumed, audio switch, failure-streak pause
 python -m app.tasks.field_checks
 python -m app.tasks.costs
 python -m dashboard.sheet_sync

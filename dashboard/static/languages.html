@@ -79,8 +79,14 @@ async function loadLanguages() {
   try {
     LANGS_CACHE = await (await fetch('/api/languages')).json();
     if (LANGS_CACHE.error) {
-      box.innerHTML = `<div class="muted" style="color:#8a1c12">${LANGS_CACHE.error}</div>`;
-      ['add-btn', 'sync-btn'].forEach(id => { document.getElementById(id).disabled = true; });
+      // The current website theme has its languages built in. Show them, and hide
+      // the forms that could only fail.
+      const all = await (await fetch('/api/all_langs')).json();
+      document.querySelectorAll('.card').forEach((c, i) => { if (i === 0) c.style.display = 'none'; });
+      document.getElementById('sync-btn').style.display = 'none';
+      box.previousElementSibling.textContent = 'These are the languages the website shows today. They are built into the website’s theme, so adding or removing one needs a developer — everything else in this dashboard works with all of them.';
+      box.innerHTML = '<table><thead><tr><th>Code</th><th>Language</th></tr></thead><tbody>'
+        + all.langs.map(c => `<tr><td><b>${c}</b></td><td>${all.names[c] || c}</td></tr>`).join('') + '</tbody></table>';
       LANGS_CACHE = {};
       return;
     }
