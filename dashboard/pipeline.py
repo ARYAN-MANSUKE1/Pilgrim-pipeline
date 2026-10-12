@@ -191,6 +191,19 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
                         else f"[{tgt}] article already correct - only its title was filled in")
                 except Exception as e:  # one language failing shouldn't kill the rest
                     log(f"[{tgt}] TRANSLATE FAILED: {e}")
+        # A temple added in Marathi, Tamil... has no English title until this run makes
+        # one, so its titles were translated straight from the original -- which fails
+        # now and then (the model hands a title back unchanged). Titles that failed get
+        # one more try from the English title just produced; English is the candidate
+        # every other temple's titles are made from.
+        fresh_en = "" if en_title else results.get("en", ("", ""))[0]
+        if fresh_en:
+            for tgt, (title, html) in list(results.items()):
+                if tgt != "en" and not title and need[tgt][1]:
+                    retry = translate_title([("en", fresh_en)], tgt, gtranslate)
+                    if retry:
+                        results[tgt] = (retry, html)
+                        log(f"[{tgt}] title translated from the new English title")
         # Write-back is one request for all languages, with a per-language
         # fallback: the staging host can take 45s+ under load, and a single
         # timeout must never throw away translations Gemini already charged for.

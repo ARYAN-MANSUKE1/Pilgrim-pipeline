@@ -157,4 +157,29 @@ check(f"per-word <span> source: {len(calls)} call(s), no spans left", len(calls)
 saved, err, _ = run(lambda t, s, g: "")
 check("empty replies: nothing saved", all(h.strip() for t, h in saved.values()) and len(saved) < 9)
 
+# 14. A temple added in Tamil has no English title yet. A title the model refuses to
+#     translate from Tamil must be retried from the English title made in the same run.
+TA_TITLE = good("Shiva Temple of Ozar", "en", "ta")
+TA_ARTICLE = "\n\n".join(f"<p>{good(PARA * 3, 'en', 'ta')}</p>" for _ in range(6))
+def english(text):
+    return ("temple by the river " * (len(text) // 20 + 1))[: max(8, int(len(text) * 0.9))]
+def stubborn_telugu_title(text, src, tgt):
+    if tgt == "en":
+        return "Shiva Temple of Ozar" if text.strip() == TA_TITLE else english(text)
+    if tgt == "te" and src == "ta" and text.strip() == TA_TITLE:
+        return text                      # handed back unchanged -> rejected as a title
+    return good(text, src, tgt)
+pipe._fetch = lambda pid: {"id": pid, "slug": "t", "status": "publish", "acf": {CF["ta"]: TA_ARTICLE, TF["ta"]: TA_TITLE},
+                           "title": {"raw": TA_TITLE, "rendered": TA_TITLE}}
+pipe.gtranslate = stubborn_telugu_title
+del written[:]
+msgs = []
+pipe.process_temple(1, operation="translate", languages=None, source="ta", log=msgs.append, translate_langs=["en", "te", "kn"])
+saved = {}
+for w in written:
+    saved.update(w)
+check("Tamil-only temple: Telugu title that failed from Tamil is made from the new English title",
+      saved.get("te", ("", ""))[0] not in ("", TA_TITLE) and any("from the new English title" in m for m in msgs))
+check("...and titles that worked first time are not redone", sum("from the new English title" in m for m in msgs) == 1 and saved["kn"][0])
+
 print("\nall edge cases passed")
