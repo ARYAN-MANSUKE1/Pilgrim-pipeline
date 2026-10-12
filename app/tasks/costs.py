@@ -23,6 +23,7 @@ import json
 import threading
 from datetime import date
 from pathlib import Path
+from statistics import median
 
 from app.config import settings
 
@@ -153,7 +154,10 @@ def per_language_inr() -> dict[str, float]:
             # The PDF averages predate gemini-3.1-flash-lite. Measured on the live-only
             # temples (Sept 2026): Rs 4.7 per temple for 9 languages = ~Rs 0.52 each.
             fallback = 0.55
-        out[kind] = round(sum(vals) / len(vals), 2) if len(vals) >= 20 else round(fallback, 2)
+        # Median over at least 100 temple-languages (about a dozen temples): the first
+        # history is always a few short test temples, and their mean (Rs 0.02 each)
+        # once turned a Rs 1,044 estimate into Rs 323. Real articles cost ~Rs 0.5.
+        out[kind] = round(median(vals), 2) if len(vals) >= 100 else round(fallback, 2)
     return out
 
 

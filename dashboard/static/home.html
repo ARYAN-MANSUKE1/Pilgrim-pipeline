@@ -81,7 +81,7 @@ window.addEventListener('pp-stats', e => {
   document.getElementById('s-spent').textContent = inr(sp.translation + sp.audio);
   document.getElementById('s-spent-split').textContent = `translation ${inr(sp.translation)} · audio ${inr(sp.audio)}`;
 
-  document.getElementById('counted').textContent = b.counting ? 'counting… (about a minute)'
+  document.getElementById('counted').textContent = b.counting ? (d ? 'updating the numbers… (a few minutes — you can keep working)' : 'counting the temples… (a few minutes)')
     : b.error ? b.error : b.counted_at ? 'counted ' + ago(b.counted_at) : '';
   document.getElementById('refresh').disabled = !!b.counting;
   if (!d) return;
@@ -102,7 +102,9 @@ window.addEventListener('pp-stats', e => {
   for (const [k, n, label] of [['text', d.need_text, 'Translate'], ['audio', d.need_audio, 'Generate audio for']]) {
     const btn = document.getElementById('run-' + k);
     const hold = k === 'audio' && !audioOn;
-    btn.disabled = !n || !!b.counting || hold;
+    // Not locked while a recount runs (4-5 minutes on the live site, after every start):
+    // the previous list is still right, and a temple finished meanwhile is skipped for free.
+    btn.disabled = !n || hold;
     btn.textContent = hold ? 'Audio is on hold' : n ? `${label} all ${num(n)}` : 'Nothing to do';
   }
   document.getElementById('nosource').textContent = d.no_source

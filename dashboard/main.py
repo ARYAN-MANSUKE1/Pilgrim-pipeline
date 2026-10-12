@@ -21,7 +21,7 @@ import re
 import threading
 import time
 import unicodedata
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import httpx
@@ -624,6 +624,14 @@ def refresh_backlog_async() -> bool:
 
 
 def _backlog_loop():
+    # A fresh count reads the whole website (minutes). After a restart, the saved one
+    # is good enough until it is BACKLOG_EVERY old -- "Refresh counts" still forces one.
+    try:
+        age = time.time() - datetime.fromisoformat(_backlog["counted_at"]).timestamp()
+    except Exception:
+        age = BACKLOG_EVERY
+    if 0 <= age < BACKLOG_EVERY and "titles" in (_backlog.get("data") or {}):
+        time.sleep(BACKLOG_EVERY - age)
     while True:
         refresh_backlog_async()
         time.sleep(BACKLOG_EVERY)
