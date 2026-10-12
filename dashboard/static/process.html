@@ -21,7 +21,7 @@
 
   <div class="wrap">
     <div class="toolbar">
-      <input id="search" type="search" placeholder="Search temple by name…" style="min-width:320px" onkeydown="if(event.key==='Enter')load(1)">
+      <input id="search" type="search" placeholder="Search by temple name in any language, or by ID…" style="min-width:320px" onkeydown="if(event.key==='Enter')load(1)">
       <button class="btn" onclick="load(1)">Search Temple</button>
       <button class="btn ghost" onclick="document.getElementById('search').value='';load(1)">Clear</button>
       <button class="btn ghost" id="exportbtn" onclick="exportCsv()" title="A spreadsheet of every temple: languages, audio, cost, and what the live site has">Export to Excel (CSV)</button>
@@ -76,6 +76,7 @@
 // Populated from /api/temples' "langs" field (server-driven from the language
 // registry), not hardcoded -- so a language added/removed via the dashboard
 // shows up here automatically, no code change needed.
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let LANGS = [];
 let AUDIO_ON = false;
 let NAMES = {};
@@ -116,7 +117,7 @@ async function load(page) {
       </span>`).join('')
       + (AUDIO_ON ? '' : '<span class="muted" style="font-size:12px; margin-left:8px">Audio generation is switched off for now.</span>');
   }
-  document.getElementById('count').textContent = `${data.total} temples`;
+  document.getElementById('count').textContent = data.note || `${data.total} temple${data.total === 1 ? '' : 's'}${q ? ' found' : ''}`;
   document.getElementById('count2').textContent = `${data.total} temples`;
   document.getElementById('pageinfo').textContent = `Page ${data.page} of ${Math.max(1, data.pages)}`;
   document.getElementById('prev').disabled = data.page<=1;
@@ -132,7 +133,7 @@ function renderTable(data) {
   const rows = data.temples.map(t => {
     const langs = LANGS.map(l => chip(l, t.content[l]??0, data.min_chars, !!t.audio[l], t.source===l)).join('');
     const checked = state.selected.has(t.id) ? 'checked' : '';
-    return `<tr><td><input type="checkbox" class="rowchk" data-id="${t.id}" ${checked} onchange="toggleRow(${t.id}, this.checked)"></td><td>${t.id}</td><td class="temple"><a href="${t.link}" target="_blank">${t.title}</a>${t.status && t.status !== 'publish' ? ` <span class="status queued">${t.status}</span>` : ''}<div class="muted">written in: <b>${t.source ? ((data.names || {})[t.source] || t.source) : 'no article yet'}</b></div></td><td><div class="langs">${langs}</div></td></tr>`;
+    return `<tr><td><input type="checkbox" class="rowchk" data-id="${t.id}" ${checked} onchange="toggleRow(${t.id}, this.checked)"></td><td>${t.id}</td><td class="temple"><a href="${t.link}" target="_blank">${t.title}</a>${t.match ? `<div style="font-size:14px; margin-top:2px">${esc(t.match.title)} <span class="muted">(${(data.names || {})[t.match.lang] || t.match.lang} title)</span></div>` : ''}${t.status && t.status !== 'publish' ? ` <span class="status queued">${t.status}</span>` : ''}<div class="muted">written in: <b>${t.source ? ((data.names || {})[t.source] || t.source) : 'no article yet'}</b></div></td><td><div class="langs">${langs}</div></td></tr>`;
   }).join('');
   document.getElementById('tablebox').innerHTML = `<table><thead><tr><th style="width:34px"><input type="checkbox" onchange="toggleAll(this.checked)"></th><th style="width:64px">ID</th><th>Temple</th><th>Languages (✓ text · ♪ audio)</th></tr></thead><tbody>${rows}</tbody></table>`;
 }

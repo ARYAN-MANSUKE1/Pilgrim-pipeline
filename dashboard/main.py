@@ -20,6 +20,7 @@ import os
 import re
 import threading
 import time
+import unicodedata
 from datetime import date
 from pathlib import Path
 
@@ -114,6 +115,38 @@ def _status(acf: dict) -> dict:
     return {"content": content, "audio": audio, "source": src}
 
 
+def _norm(s: str) -> str:
+    return unicodedata.normalize("NFC", html.unescape(s or "")).casefold()
+
+
+def _search_titles(q: str) -> list[tuple[int, str, str]] | None:
+    """[(temple id, language code or "", the title that matched)] for a search in any
+    language, in page-title order -- or None while the title index is not built yet.
+
+    WordPress's own search only looks at the page title (English on almost every
+    temple), so "गणपती" or "கோயில்" found nothing. The titles of every language are
+    already read by the "what's left" count, which keeps them as an index; this
+    searches that. Every word must appear in one title, in any order; a number
+    matches the temple ID.
+    """
+    idx = (_backlog.get("data") or {}).get("titles")
+    if not idx:
+        return None
+    words = _norm(q).split()
+    hits = []
+    for tid, titles in idx.items():
+        if q.strip().isdigit() and str(tid) == q.strip():
+            hits.append((int(tid), "", "", _norm(titles.get("wp", ""))))
+            continue
+        for lang, title in titles.items():            # "wp" (the page title) comes first
+            t = _norm(title)
+            if words and all(w in t for w in words):
+                hits.append((int(tid), "" if lang == "wp" else lang, title, _norm(titles.get("wp", ""))))
+                break
+    hits.sort(key=lambda h: h[3])
+    return [h[:3] for h in hits]
+
+
 @app.get("/api/temples")
 def list_temples(page: int = 1, per_page: int = Query(20, le=100), search: str = ""):
     """A page of temples with per-language status, straight from WordPress."""
@@ -123,11 +156,40 @@ def list_temples(page: int = 1, per_page: int = Query(20, le=100), search: str =
         "context": "edit", "page": page, "per_page": per_page,
         "orderby": "title", "order": "asc", "status": ALL_STATUSES,
     }
-    if search:
-        params["search"] = search
+    search = search.strip()
+    matched: dict[int, tuple[str, str]] = {}
+    hits = _search_titles(search) if search else None
+    note = ""
     try:
-        r = httpx.get(f"{WP_BASE}/temple", params=params, auth=AUTH, timeout=45)
-        r.raise_for_status()
+        if hits is not None:
+            ids = [h[0] for h in hits]
+            # Temples added in WordPress since the index was last built are not in it
+            # yet: add whatever WordPress's own (page-title) search finds.
+            try:
+                extra = httpx.get(f"{WP_BASE}/temple", auth=AUTH, timeout=30, params={
+                    "search": search, "per_page": 100, "_fields": "id", "status": ALL_STATUSES})
+                ids += [x["id"] for x in extra.json() if x["id"] not in set(ids)] if extra.status_code == 200 else []
+            except httpx.HTTPError:
+                pass
+            matched = {h[0]: (h[1], h[2]) for h in hits}
+            total = len(ids)
+            page_ids = ids[(page - 1) * per_page: page * per_page]
+            if not page_ids:
+                return {"total": total, "pages": max(1, -(-total // per_page)), "page": page, "per_page": per_page,
+                        "langs": current_langs, "names": LANG_NAMES, "audio_enabled": settings.audio_enabled,
+                        "min_chars": MIN_CHARS, "temples": []}
+            r = httpx.get(f"{WP_BASE}/temple", auth=AUTH, timeout=45, params={
+                "context": "edit", "include": ",".join(map(str, page_ids)), "orderby": "include",
+                "per_page": len(page_ids), "status": ALL_STATUSES})
+            r.raise_for_status()
+            r.headers["X-WP-Total"] = str(total)
+            r.headers["X-WP-TotalPages"] = str(max(1, -(-total // per_page)))
+        else:
+            if search:
+                params["search"] = search
+                note = "Searching page titles only for the moment - titles in every language become searchable about a minute after the dashboard starts."
+            r = httpx.get(f"{WP_BASE}/temple", params=params, auth=AUTH, timeout=45)
+            r.raise_for_status()
     except httpx.HTTPError as e:
         return {"error": f"Could not reach WordPress: {e}", "total": 0, "pages": 1,
                 "page": page, "per_page": per_page, "langs": current_langs,
@@ -143,9 +205,13 @@ def list_temples(page: int = 1, per_page: int = Query(20, le=100), search: str =
             "slug": t.get("slug", ""),
             "link": t.get("link", ""),
             "status": t.get("status", ""),
+            # the title that matched the search, when it was not the page title
+            "match": ({"lang": matched[t["id"]][0], "title": matched[t["id"]][1]}
+                      if matched.get(t["id"], ("", ""))[0] else None),
             **st,
         })
     return {
+        "note": note,
         "total": int(r.headers.get("X-WP-Total", 0)),
         "pages": int(r.headers.get("X-WP-TotalPages", 1)),
         "page": page,
@@ -495,11 +561,15 @@ def _count_backlog() -> dict:
     d = {"total": 0, "complete": 0, "need_text": 0, "need_audio": 0, "no_source": 0,
          "text_units": 0, "audio_units": 0}
     todo = {"text": [], "audio": []}  # [id, title, source] -- what "Queue all" sends
+    titles: dict[str, dict] = {}       # id -> {"wp": page title, "mr": ..., "ta": ...} for search in any language
 
     def tally(r):
         for t in r.json():
             acf = t.get("acf") or {}
             d["total"] += 1
+            titles[str(t["id"])] = {
+                "wp": html.unescape((t.get("title") or {}).get("rendered", "")),
+                **{l: acf[f] for l, f in wp.TITLE_FIELD_KEYS.items() if isinstance(acf.get(f), str) and acf[f].strip()}}
             src = _status(acf)["source"]
             if not src:
                 d["no_source"] += 1  # nothing to translate from: needs content first
@@ -528,7 +598,7 @@ def _count_backlog() -> dict:
         for r in ex.map(_fetch_page, range(2, pages + 1)):
             tally(r)
     names = {l: LANG_NAMES.get(l, l.upper()) for l in langs}
-    return {**d, "by_lang": by_lang, "names": names, "todo": todo}
+    return {**d, "by_lang": by_lang, "names": names, "todo": todo, "titles": titles}
 
 
 def refresh_backlog_async() -> bool:
@@ -622,7 +692,7 @@ def stats():
         "spent_today": costs.spent_on(date.today().isoformat()),
         "per_language_inr": costs.per_language_inr(),
         # the to-do id lists stay server-side: the page only needs the counts
-        "backlog": {**_backlog, "data": {k: v for k, v in (_backlog.get("data") or {}).items() if k != "todo"} or None},
+        "backlog": {**_backlog, "data": {k: v for k, v in (_backlog.get("data") or {}).items() if k not in ("todo", "titles")} or None},
     }
 
 
@@ -693,6 +763,8 @@ def create_temple(req: CreateReq):
         return {"error": f"WordPress create failed ({r.status_code}): {r.text[:200]}"}
     post = r.json()
     pid = post["id"]
+    if (_backlog.get("data") or {}).get("titles") is not None:
+        _backlog["data"]["titles"][str(pid)] = {"wp": title, source_lang: title}
     op_label = "+".join(x for x in ("translate" if req.translate_langs else "",
                                     "audio" if req.audio_langs else "") if x) or "none"
     jid = jobs.enqueue(pid, title, op_label, None, source_lang,
