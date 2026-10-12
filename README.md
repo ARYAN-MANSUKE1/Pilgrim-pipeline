@@ -43,7 +43,7 @@ dashboard/
   pipeline.py                  Per-temple processing (translate / audio / both)
   jobs.py                      Background job queue with crash-resume
   sheet_sync.py                Push progress to the team's Google Sheet
-  static/                      home / process / add / ads / languages pages (plain HTML + JS)
+  static/                      home / process / add / ads pages (plain HTML + JS)
 
 app/tasks/safe_translate.py    Validate-then-save translation (see "Checked before it is saved")
 app/tasks/field_checks.py      Is a field really in the language it claims to be?
@@ -126,8 +126,10 @@ over HTTPS). Pages:
 - **Ads** - ad campaigns: image, link, placement (top / left / right / bottom),
   dates, target states and districts, pause / edit / delete, impressions and clicks.
   Needs the theme's `functions.php` from `new theme/`.
-- **Languages** - only works with a theme that has the language registry
-  (`pilgrim/v1/languages`); the current theme has its 10 languages built in.
+
+Home also lists the website's languages. (There used to be a Languages tab for adding
+one; it needed a registry endpoint that only the old theme had, so it was removed. The
+`/api/languages` endpoints remain for a theme that provides `pilgrim/v1/languages`.)
 
 If Gemini or Sarvam runs out of credit, a red banner names the provider, the queue
 pauses with nothing lost, and **Resume** continues after a top-up. The queue also

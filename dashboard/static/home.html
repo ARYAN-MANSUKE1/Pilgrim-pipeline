@@ -13,7 +13,6 @@
     <a href="/process">Process Temples</a>
     <a href="/add">Add Temple</a>
     <a href="/ads">Ads</a>
-    <a href="/languages">Languages</a>
     <span class="spacer"></span>
     <span class="pill" id="total">…</span>
   </nav>
@@ -46,6 +45,11 @@
       <div class="card"><p>In the queue right now</p><div class="stat" id="s-queue">…</div></div>
     </div>
     <p class="muted" id="nosource" style="margin:0 0 20px"></p>
+
+    <div class="card" style="margin-bottom:24px; padding:16px 22px">
+      <p style="margin:0 0 10px">Languages on the website <span id="langcount"></span> — temples can be written in any of them and translated into all the others</p>
+      <div id="langlist" style="display:flex; flex-wrap:wrap; gap:8px"><span class="muted">Loading…</span></div>
+    </div>
 
     <h1 class="page" style="font-size:18px">By language</h1>
     <div id="langbox" style="margin-bottom:28px"><div class="muted">Counting…</div></div>
@@ -157,6 +161,13 @@ async function stopAll() {
   alert(`Stopped ${r.cancelled} queued job(s).` + (r.stopping ? `\n${r.stopping} running job(s) will stop after the current step.` : ''));
   loadJobs();
 }
+// The website's languages: a fixed list from the server, shown as soon as the page opens.
+fetch('/api/all_langs').then(r => r.json()).then(d => {
+  document.getElementById('langcount').textContent = `(${d.langs.length})`;
+  document.getElementById('langlist').innerHTML = d.langs.map(l =>
+    `<span style="border:1px solid var(--line); border-radius:20px; padding:4px 12px; font-size:14px; background:#fff">${d.names[l] || l}</span>`).join('');
+}).catch(() => { document.getElementById('langlist').innerHTML = '<span class="muted">Could not load the list.</span>'; });
+
 loadJobs(); setInterval(loadJobs, 3000);
 </script>
 </body>

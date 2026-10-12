@@ -28,7 +28,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 from fastapi import FastAPI, Query, Request
 from starlette.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -1107,7 +1107,9 @@ def add_page():
 
 @app.get("/languages")
 def languages_page():
-    return _page("languages.html")
+    # The Languages tab was removed (the current theme has its languages built in);
+    # the list is on Home now. An old bookmark should not 404.
+    return RedirectResponse("/")
 
 
 @app.get("/ads")
