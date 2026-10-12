@@ -186,7 +186,9 @@ def _process(post_id, operation, languages, source, log, translate_langs, audio_
                 try:
                     _, title, html = fut.result()
                     results[tgt] = (title, html)
-                    log(f"[{tgt}] translated ({len(html)} chars)")
+                    # A title-only repair has no new article; "translated (0 chars)" read like a failure.
+                    log(f"[{tgt}] translated ({len(html)} chars)" if html
+                        else f"[{tgt}] article already correct - only its title was filled in")
                 except Exception as e:  # one language failing shouldn't kill the rest
                     log(f"[{tgt}] TRANSLATE FAILED: {e}")
         # Write-back is one request for all languages, with a per-language
