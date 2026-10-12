@@ -29,6 +29,7 @@
           <option value="other">Other — auto-detect</option>
         </select>
         <div class="hint">Pick <b>Other</b> only if the text is in another language (e.g. Tamil) — it is then detected automatically.</div>
+        <div id="detected" style="margin-top:6px; font-size:14px; min-height:20px"></div>
       </label>
 
       <div class="hint" style="background:#fff6ec; border:1px solid var(--line); border-radius:8px; padding:10px 12px; margin-bottom:16px;">
@@ -84,12 +85,55 @@
 let LANGS = [];
 let NAMES = {};
 let AUDIO_ON = false;
+// What language the pasted text is in, worked out in the browser from its script
+// (instant and free). The server still makes the final call when "Other" is chosen;
+// this is so the person sees it BEFORE pressing Create. Marathi and Hindi share a
+// script, so those two are told apart by their commonest words.
+const SCRIPT = {gj: [0x0A80, 0x0AFF], ta: [0x0B80, 0x0BFF], te: [0x0C00, 0x0C7F], kn: [0x0C80, 0x0CFF],
+                ml: [0x0D00, 0x0D7F], bn: [0x0980, 0x09FF], pa: [0x0A00, 0x0A7F], dev: [0x0900, 0x097F]};
+const MR_WORDS = new Set(['आहे', 'आणि', 'मध्ये', 'येथे', 'आहेत', 'होते', 'होती', 'म्हणून']);
+const HI_WORDS = new Set(['है', 'और', 'में', 'था', 'थी', 'हैं', 'यह', 'इस']);
+function guessLang(text) {
+  const t = text.replace(/<[^>]+>/g, ' ');
+  const n = {}; let letters = 0;
+  for (const ch of t) {
+    const c = ch.codePointAt(0);
+    let k = /[A-Za-z]/.test(ch) ? 'en' : null;
+    if (!k) for (const [l, [a, b]] of Object.entries(SCRIPT)) if (c >= a && c <= b) { k = l; break; }
+    if (k) { n[k] = (n[k] || 0) + 1; letters++; }
+  }
+  if (letters < 40) return null;                       // too little text to say
+  const [best, count] = Object.entries(n).sort((a, b) => b[1] - a[1])[0];
+  if (count / letters < 0.6) return null;              // a mix of scripts
+  if (best !== 'dev') return best;
+  const words = t.split(/[\s,.।!?]+/);
+  const mr = words.filter(w => MR_WORDS.has(w)).length, hi = words.filter(w => HI_WORDS.has(w)).length;
+  return mr > hi ? 'mr' : hi > mr ? 'hi' : 'dev';
+}
+let lastSource = null;
+function showDetected() {
+  const src = document.getElementById('src').value, box = document.getElementById('detected');
+  const g = guessLang(document.getElementById('content').value);
+  const name = l => l === 'dev' ? 'Marathi or Hindi' : (NAMES[l] || l);
+  if (src === 'other') {
+    box.innerHTML = !g ? '<span class="muted">Paste the text and the language will be shown here.</span>'
+      : g === 'dev' ? '<span style="color:#c0392b">This looks like <b>Marathi or Hindi</b> — please pick the right one from the list above.</span>'
+      : `<span style="color:#1c7a34">✓ Detected language: <b>${name(g)}</b></span>`;
+  } else {
+    box.innerHTML = g && g !== src && !(g === 'dev' && (src === 'mr' || src === 'hi'))
+      ? `<span style="color:#c0392b">This text looks like <b>${name(g)}</b>, not ${name(src)} — choose the right language above.</span>` : '';
+  }
+  // the language the text is in is never a translation target
+  const eff = src === 'other' ? (g && g !== 'dev' ? g : null) : src;
+  if (eff !== lastSource) { lastSource = eff; buildMatrix(); }
+}
 function buildMatrix() {
-  const src = document.getElementById('src').value;
+  const src = lastSource;
+  const was = {}; document.querySelectorAll('#matrixbody .tr').forEach(c => was[c.dataset.l] = c.checked);   // keep the ticks already made
   document.getElementById('matrixbody').innerHTML = LANGS.map(l => {
     const isSrc = (l === src);  // source is never translated
     const trCell = isSrc ? '<span class="muted">source</span>'
-                         : `<input type="checkbox" class="tr" data-l="${l}" checked>`;
+                         : `<input type="checkbox" class="tr" data-l="${l}" ${was[l] === false ? '' : 'checked'}>`;
     return `<tr><td>${NAMES[l] || l}</td>
       <td style="text-align:center">${trCell}</td>
       <td style="text-align:center">${AUDIO_ON ? `<input type="checkbox" class="au" data-l="${l}">` : '<span class="muted">on hold</span>'}</td></tr>`;
@@ -132,11 +176,13 @@ async function uploadPhotos() {
   return ids;
 }
 function setCol(cls, on){ document.querySelectorAll('.'+cls).forEach(c=>c.checked=on); }
-document.getElementById('src').addEventListener('change', buildMatrix);
+document.getElementById('src').addEventListener('change', showDetected);
+document.getElementById('content').addEventListener('input', showDetected);
 (async function () {
   const data = await (await fetch('/api/all_langs')).json();
   LANGS = data.langs; NAMES = data.names; AUDIO_ON = !!data.audio_enabled;
   document.querySelectorAll('.audioctl').forEach(b => b.style.display = AUDIO_ON ? '' : 'none');
+  lastSource = document.getElementById('src').value;
   buildMatrix();
 })();
 
@@ -166,7 +212,7 @@ async function create() {
           When it finishes, open it in WordPress to set State / City / Category, check it, and publish.</p>
        <a href="${res.edit_link}" target="_blank"><button class="btn ghost">Open in the WordPress editor</button></a></div>`;
     document.getElementById('title').value=''; document.getElementById('content').value='';
-    PHOTOS = []; drawPhotos();
+    PHOTOS = []; drawPhotos(); showDetected();
     btn.disabled = false;
   } catch(e) { msg('Failed: ' + e.message + ' — nothing was created; fix it and press Create again.', true); btn.disabled=false; }
 }
