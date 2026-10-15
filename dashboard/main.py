@@ -115,8 +115,47 @@ def _status(acf: dict) -> dict:
     return {"content": content, "audio": audio, "source": src}
 
 
+# Spelling differences people do not mean when they search in an Indian script:
+# चंद्रबिंदु vs अनुस्वार (ढूँढिराज / ढूंढिराज), short vs long i and u (गणपति / गणपती),
+# a nasal consonant written out vs as a dot (કુન્તા / કુંતા), nukta, joiners.
+# Devanagari, Bengali, Gurmukhi, Gujarati, Tamil, Telugu, Kannada and Malayalam all
+# share one layout (each block is 0x80 wide with the same letter at the same offset),
+# so the rules are written once, by offset. Used ONLY to compare for search --
+# nothing stored or shown is changed.
+_NASALS = {0x19, 0x1E, 0x23, 0x28, 0x2E}            # ṅa ña ṇa na ma
+_FOLD = {0x01: 0x02,                                 # candrabindu -> anusvara
+         0x40: 0x3F, 0x42: 0x41,                     # vowel signs ii -> i, uu -> u
+         0x08: 0x07, 0x0A: 0x09}                     # letters II -> I, UU -> U
+_PUNCT = str.maketrans({c: " " for c in ",.;:()[]{}|/\\-–—'\"‘’“”।"})
+
+
 def _norm(s: str) -> str:
-    return unicodedata.normalize("NFC", html.unescape(s or "")).casefold()
+    """A title or a search, reduced to what should count as 'the same spelling'."""
+    s = unicodedata.normalize("NFC", html.unescape(s or "")).casefold().translate(_PUNCT)
+    out, i, n = [], 0, len(s)
+    while i < n:
+        c = ord(s[i])
+        if c in (0x200C, 0x200D):                    # zero-width (non-)joiner
+            i += 1
+            continue
+        if 0x0900 <= c <= 0x0D7F:
+            base, off = c & ~0x7F, c & 0x7F
+            if off == 0x3C:                          # nukta
+                i += 1
+                continue
+            # nasal consonant + virama + another consonant  ==  anusvara
+            if (off in _NASALS and i + 2 < n and ord(s[i + 1]) == base + 0x4D
+                    and 0x15 <= (ord(s[i + 2]) - base) <= 0x39):
+                out.append(chr(base + 0x02))
+                i += 2
+                continue
+            if base == 0x0A00 and off == 0x70:       # Gurmukhi tippi is its anusvara
+                off = 0x02
+            out.append(chr(base + _FOLD.get(off, off)))
+        else:
+            out.append(s[i])
+        i += 1
+    return " ".join("".join(out).split())
 
 
 def _search_titles(q: str) -> list[tuple[int, str, str]] | None:
